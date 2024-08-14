@@ -8,11 +8,12 @@ use std::io::Write;
 #[derive(Deserialize, Debug)]
 struct Sample {
     phase_id_ref: String,
-    ri: String,
+    backward_ri: String,
     tag: String,
     time: u64,
 }
 
+#[allow(dead_code)] //This code is not used in the current implementation
 #[derive(Serialize)]
 struct PhaseTime {
     phase_id: u16,
@@ -36,16 +37,16 @@ pub fn get_prl_hists(
     bin_ri_distributions.insert(0, curr_ri_distribution_dict.clone());
 
     let mut rdr = csv::ReaderBuilder::new()
-        .has_headers(false)
+        .has_headers(true)
         .from_path(input_file)
         .unwrap();
     for result in rdr.deserialize() {
         let sample: Sample = result.unwrap();
         last_address = sample.time;
     }
-    let bin_width = ((last_address as f64 / (num_bins as f64)) as f64).ceil() as u64;
+    let bin_width = (last_address as f64 / (num_bins as f64)).ceil() as u64;
     let mut rdr = csv::ReaderBuilder::new()
-        .has_headers(false)
+        .has_headers(true)
         .from_path(input_file)
         .unwrap();
     for result in rdr.deserialize() {
@@ -65,7 +66,7 @@ pub fn get_prl_hists(
         let set = (tag & set_mask) as u64;
 
         let addr = u64::from_str_radix(&sample.phase_id_ref, 16).unwrap() | (set << 32);
-        let ri = u64::from_str_radix(&sample.ri, 16).unwrap();
+        let ri = u64::from_str_radix(&sample.backward_ri, 16).unwrap();
 
         if curr_bin_dict.contains_key(&addr) {
             curr_bin_dict.insert(addr, curr_bin_dict.get(&addr).unwrap() + 1);
@@ -81,7 +82,7 @@ pub fn get_prl_hists(
         //if yes, then increment the count for that RI, if not, insert a new key value pair (ri,1).
         *curr_ri_distribution_dict
             .entry(addr)
-            .or_insert(HashMap::new())
+            .or_default()
             .entry(ri)
             .or_insert(0) += 1;
 
@@ -95,13 +96,20 @@ pub fn get_prl_hists(
     bin_freqs.insert(curr_bin, curr_bin_dict.clone());
     bin_ri_distributions.insert(curr_bin, curr_ri_distribution_dict.clone());
     //if a reference is not in a bin, add it with a frequency count of 0
-    let temp = bin_freqs.clone();
-    for (bin, _addrs) in &temp {
-        let bin_freqs_temp = bin_freqs.entry(*bin).or_insert(HashMap::new());
+    // let temp = bin_freqs.clone();
+    // for (bin, _addrs) in &temp {
+    //     let bin_freqs_temp = bin_freqs.entry(*bin).or_insert(HashMap::new());
+    //     for key in &all_keys {
+    //         bin_freqs_temp.entry(*key).or_insert(0);
+    //     }
+    // }
+    // Ensure that all addresses are accounted for in each bin
+    for bin_freqs_temp in bin_freqs.values_mut() {
         for key in &all_keys {
             bin_freqs_temp.entry(*key).or_insert(0);
         }
     }
+
     (
         super::lease_gen::BinnedRIs::new(bin_ri_distributions),
         super::lease_gen::BinFreqs::new(bin_freqs),
@@ -112,16 +120,15 @@ pub fn get_prl_hists(
 pub fn build_phase_transitions(input_file: &str) -> (Vec<(u64, u64)>, usize, u64) {
     println!("Reading input from: {}", input_file);
     let mut rdr = csv::ReaderBuilder::new()
-        .has_headers(false)
-        .from_path(input_file)
-        .unwrap();
+        .has_headers(true)
+        .from_reader(File::open(input_file).unwrap());
     let mut u_tags = HashMap::<u64, bool>::new();
     let mut sample_hash = HashMap::new();
     let mut last_sample_time: u64 = 0;
     let mut sample_num: u64 = 0;
     for result in rdr.deserialize() {
         let sample: Sample = result.unwrap();
-        let ri = u64::from_str_radix(&sample.ri, 16).unwrap();
+        let ri = u64::from_str_radix(&sample.backward_ri, 16).unwrap();
         //don't use end of benchmark infinite RIs
 
         //store unique tags
@@ -129,12 +136,11 @@ pub fn build_phase_transitions(input_file: &str) -> (Vec<(u64, u64)>, usize, u64
         let phase_id_ref = u64::from_str_radix(&sample.phase_id_ref, 16).unwrap();
         let phase_id = (phase_id_ref & 0xFF000000) >> 24;
         let reuse_time = sample.time;
-        let use_time;
-        if (ri as i32) < 0 {
-            use_time = reuse_time - (ri as i32).abs() as u64;
+        let use_time = if (ri as i32) < 0 {
+            reuse_time - (ri as i32).unsigned_abs() as u64
         } else {
-            use_time = reuse_time - ri as u64;
-        }
+            reuse_time - ri
+        };
         sample_hash.insert(use_time, phase_id);
         //get empircal sampling rate
         last_sample_time = sample.time;
@@ -164,14 +170,14 @@ pub fn build_phase_transitions(input_file: &str) -> (Vec<(u64, u64)>, usize, u64
     let mut sorted_transitions: Vec<_> = phase_transitions.iter().collect();
     sorted_transitions.sort_by_key(|a| a.0);
 
-    return (
+    (
         sorted_transitions
             .iter()
             .map(|&x| (*(x.0), *(x.1)))
             .collect(),
         first_misses,
         sampling_rate,
-    );
+    )
 }
 
 //Build ri hists in the following form
@@ -192,7 +198,7 @@ pub fn build_ri_hists(
 ) -> (super::lease_gen::RIHists, HashMap<u64, u64>, usize, u64) {
     let (phase_transitions, first_misses, sampling_rate) = build_phase_transitions(input_file);
     let mut rdr = csv::ReaderBuilder::new()
-        .has_headers(false)
+        .has_headers(true)
         .from_path(input_file)
         .unwrap();
 
@@ -204,7 +210,7 @@ pub fn build_ri_hists(
         println!("before first pass!");
         for result in rdr.deserialize() {
             let sample: Sample = result.unwrap();
-            let ri = u32::from_str_radix(&sample.ri, 16).unwrap();
+            let ri = u32::from_str_radix(&sample.backward_ri, 16).unwrap();
             let reuse_time = sample.time;
             let use_time;
 
@@ -228,12 +234,13 @@ pub fn build_ri_hists(
                 Some(v) => v,
                 None => (reuse_time + 1, 0),
             };
-            super::lease_gen::process_sample_head_cost(
+            super::lease_gen::process_sample_cost(
                 &mut ri_hists,
                 set_phase_id_ref,
                 ri_signed as u64,
                 use_time,
                 next_phase_tuple,
+                true,
             );
 
             let phase_id = (phase_id_ref & 0xFF000000) >> 24;
@@ -241,14 +248,14 @@ pub fn build_ri_hists(
         }
 
         let mut rdr = csv::ReaderBuilder::new()
-            .has_headers(false)
+            .has_headers(true)
             .from_path(input_file)
             .unwrap();
         println!("before second pass!");
         //second pass for tail costs
         for result in rdr.deserialize() {
             let sample: Sample = result.unwrap();
-            let ri = u32::from_str_radix(&sample.ri, 16).unwrap();
+            let ri = u32::from_str_radix(&sample.backward_ri, 16).unwrap();
 
             let reuse_time = sample.time;
             let use_time;
@@ -273,12 +280,13 @@ pub fn build_ri_hists(
                 None => (reuse_time + 1, 0),
             };
 
-            super::lease_gen::process_sample_tail_cost(
+            super::lease_gen::process_sample_cost(
                 &mut ri_hists,
                 set_phase_id_ref,
                 ri_signed as u64,
                 use_time,
                 next_phase_tuple,
+                false,
             );
         }
     }
@@ -287,7 +295,7 @@ pub fn build_ri_hists(
     else {
         for result in rdr.deserialize() {
             let sample: Sample = result.unwrap();
-            let mut ri = u64::from_str_radix(&sample.ri, 16).unwrap();
+            let mut ri = u64::from_str_radix(&sample.backward_ri, 16).unwrap();
             let _reuse_time = sample.time;
             //if sample is negative, there is no reuse
             let ri_signed = ri as i32;
@@ -354,7 +362,7 @@ pub fn dump_leases(
         }
     }
     lease_vector.sort_by_key(|a| (a.0, a.1)); //sort by phase and then by reference
-                                              //get number of predicted misses
+    //get number of predicted misses
     for (phase, address, lease_short, lease_long, percentage) in lease_vector.iter() {
         //reassemble phase address
         let phase_address = address | phase << 24;
@@ -363,7 +371,7 @@ pub fn dump_leases(
         //thus if an RI for a reference didn't occur during runtime
         //(i.e., the base lease of 1 that all references get)
         //we can assume the number of hits it gets is zero.
-        if lease_hits.get(&phase_address).unwrap().get(lease_short) != None {
+        if lease_hits.get(&phase_address).unwrap().get(lease_short).is_some() {
             num_hits += (*lease_hits
                 .get(&phase_address)
                 .unwrap()
@@ -372,7 +380,7 @@ pub fn dump_leases(
                 * (percentage))
                 .round() as u64;
         }
-        if lease_hits.get(&phase_address).unwrap().get(lease_long) != None {
+        if lease_hits.get(&phase_address).unwrap().get(lease_long).is_some() {
             num_hits += (*lease_hits
                 .get(&phase_address)
                 .unwrap()
@@ -386,28 +394,26 @@ pub fn dump_leases(
     let mut file = File::create(output_file).expect("create failed");
 
     file.write_all(
-        &format!(
+        format!(
             "Dump predicted miss count (no contention misses): {}\n",
             trace_length - num_hits * sampling_rate + first_misses as u64
         )[..]
             .as_bytes(),
-    )
-    .expect("write failed");
+    ).expect("write failed");
 
     file.write_all("Dump formated leases\n".as_bytes())
         .expect("write failed");
 
     for (phase, address, lease_short, lease_long, percentage) in lease_vector.iter() {
         file.write_all(
-            &format!(
+            format!(
                 "{:x}, {:x}, {:x}, {:x}, {}\n",
                 phase, address, lease_short, lease_long, percentage
             )[..]
                 .as_bytes(),
-        )
-        .expect("write failed");
+        ).expect("write failed");
     }
-    return lease_vector;
+    lease_vector
 }
 // function for generating c-files
 pub fn gen_lease_c_file(
@@ -418,7 +424,10 @@ pub fn gen_lease_c_file(
     output_file: String,
     discretize_width: u64,
 ) {
-    let mut phase_lease_arr: HashMap<u64, HashMap<u64, (u64, u64, f64, bool)>> = HashMap::new();
+    type LeaseData = (u64, u64, f64, bool);
+    type PhaseLeaseMap = HashMap<u64, HashMap<u64, LeaseData>>;
+
+    let mut phase_lease_arr: PhaseLeaseMap = HashMap::new();
     let mut phases: Vec<u64> = Vec::new();
     for lease in lease_vector.iter() {
         if !phases.contains(&lease.0) {
@@ -440,13 +449,13 @@ pub fn gen_lease_c_file(
     for (phase, address, lease_short, lease_long, percentage) in lease_vector.iter() {
         phase_lease_arr
             .entry(*phase)
-            .or_insert(HashMap::new())
+            .or_default()
             .entry(*address)
             .or_insert((
                 *lease_short,
                 *lease_long,
                 *percentage,
-                if lease_long > &0 { true } else { false },
+                lease_long > &0,
             ));
     }
     let default_lease = 1;
@@ -476,17 +485,17 @@ pub fn gen_lease_c_file(
     file.write_all("#include \"stdint.h\"\n\n".as_bytes())
         .expect("write failed");
     file.write_all(
-            format!(
-                "static uint32_t lease[{}] __attribute__((section (\".lease\"))) __attribute__ ((__used__)) = {{\n",
-                mem_size/4)
+        format!(
+            "static uint32_t lease[{}] __attribute__((section (\".lease\"))) __attribute__ ((__used__)) = {{\n",
+            mem_size / 4)
             .as_bytes())
-            .expect("write failed");
+        .expect("write failed");
     file.write_all("// lease header\n".as_bytes())
         .expect("write failed");
     let mut phase_index: u64 = 0; //len returns usize which can't directly substituted as u64
     for i in 0..phase_lease_arr.len() {
         let phase_leases = phase_lease_arr.get(&phase_index).unwrap();
-        phase_index = phase_index + 1; //increment to next phase
+        phase_index += 1; //increment to next phase
         file.write_all(format!("// phase {}\n", i).as_bytes())
             .expect("write failed");
 
@@ -497,7 +506,7 @@ pub fn gen_lease_c_file(
             //convert hashmap of leases for phase to vector
             lease_phase.push((*lease_ref, lease_data.0));
             //get dual lease if it exists;
-            if lease_data.3 == true && dual_lease_found == false {
+            if lease_data.3 && !dual_lease_found {
                 dual_lease_ref = (*lease_ref, lease_data.1, lease_data.2);
             }
         }
@@ -508,39 +517,39 @@ pub fn gen_lease_c_file(
                 file.write_all(
                     format!("\t0x{:08x},\t// default lease\n", default_lease).as_bytes(),
                 )
-                .expect("write failed");
+                    .expect("write failed");
             } else if j == 1 {
                 file.write_all(
                     format!("\t0x{:08x},\t// long lease value\n", dual_lease_ref.1).as_bytes(),
                 )
-                .expect("write failed");
+                    .expect("write failed");
             } else if j == 2 {
                 file.write_all(
                     format!(
                         "\t0x{:08x},\t// short lease probability\n",
                         discretize(dual_lease_ref.2, discretize_width)
                     )
-                    .as_bytes(),
+                        .as_bytes(),
                 )
-                .expect("write failed");
+                    .expect("write failed");
             } else if j == 3 {
                 file.write_all(
                     format!(
                         "\t0x{:08x},\t// num of references in phase\n",
                         phase_leases.len()
                     )
-                    .as_bytes(),
+                        .as_bytes(),
                 )
-                .expect("write failed");
+                    .expect("write failed");
             } else if j == 4 {
                 file.write_all(
                     format!(
                         "\t0x{:08x},\t// dual lease ref (word address)\n",
                         dual_lease_ref.0 >> 2
                     )
-                    .as_bytes(),
+                        .as_bytes(),
                 )
-                .expect("write failed");
+                    .expect("write failed");
             } else {
                 file.write_all(format!("\t0x{:08x},\t // unused\n", 0).as_bytes())
                     .expect("write failed");
@@ -568,16 +577,16 @@ pub fn gen_lease_c_file(
                 }
                 //print delimiter
                 if j + 1 == llt_size && k == 1 && i + 1 == phase_lease_arr.len() {
-                    file.write_all(format!("\n").as_bytes())
+                    file.write_all("\n".to_string().as_bytes())
                         .expect("write failed");
                 } else if j + 1 == llt_size {
-                    file.write_all(format!(",\n").as_bytes())
+                    file.write_all(",\n".to_string().as_bytes())
                         .expect("write failed");
                 } else if ((j + 1) % 10) == 0 {
-                    file.write_all(format!(",\n\t").as_bytes())
+                    file.write_all(",\n\t".to_string().as_bytes())
                         .expect("write failed");
                 } else {
-                    file.write_all(format!(", ").as_bytes())
+                    file.write_all(", ".to_string().as_bytes())
                         .expect("write failed");
                 }
             }
@@ -590,7 +599,7 @@ pub fn gen_lease_c_file(
 pub fn discretize(percentage: f64, discretization: u64) -> u64 {
     let percentage_binary =
         (percentage * ((2 << (discretization - 1)) as f64) - 1.0).round() as u64;
-    return percentage_binary;
+    percentage_binary
 }
 
 pub mod debug {
@@ -628,7 +637,7 @@ pub mod debug {
     pub fn destructive_print_ppuc_tree(
         ppuc_tree: &mut super::BinaryHeap<super::super::lease_gen::PPUC>,
     ) {
-        while ppuc_tree.peek() != None {
+        while ppuc_tree.peek().is_some() {
             println!("ppuc: {:?}", ppuc_tree.pop().unwrap());
         }
     }

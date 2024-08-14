@@ -14,17 +14,13 @@ pub struct BinnedRIs {
 
 impl BinFreqs {
     pub fn new(bin_freqs_input: HashMap<u64, HashMap<u64, u64>>) -> Self {
-        BinFreqs {
-            bin_freqs: bin_freqs_input,
-        }
+        Self { bin_freqs: bin_freqs_input }
     }
 }
 
 impl BinnedRIs {
     pub fn new(bin_ri_input: HashMap<u64, HashMap<u64, HashMap<u64, u64>>>) -> Self {
-        BinnedRIs {
-            bin_ri_distribution: bin_ri_input,
-        }
+        Self { bin_ri_distribution: bin_ri_input }
     }
 }
 
@@ -34,25 +30,23 @@ pub struct RIHists {
 
 impl RIHists {
     pub fn new(ri_hists_input: HashMap<u64, HashMap<u64, (u64, HashMap<u64, (u64, u64)>)>>) -> Self {
-        RIHists {
-            ri_hists: ri_hists_input,
-        }
+        Self { ri_hists: ri_hists_input }
     }
 
     pub fn get_ref_hist(&self, ref_id: u64) -> &HashMap<u64, (u64, HashMap<u64, (u64, u64)>)> {
-        return self.ri_hists.get(&ref_id).unwrap();
+        self.ri_hists.get(&ref_id).unwrap()
     }
 
     pub fn get_ref_ri_count(&self, ref_id: u64, ri: u64) -> u64 {
-        return self.ri_hists.get(&ref_id).unwrap().get(&ri).unwrap().0;
+        self.ri_hists.get(&ref_id).unwrap().get(&ri).unwrap().0
     }
 
     pub fn get_ref_ri_cost(&self, ref_id: u64, ri: u64) -> &HashMap<u64, (u64, u64)> {
-        return &self.ri_hists.get(&ref_id).unwrap().get(&ri).unwrap().1;
+        &self.ri_hists.get(&ref_id).unwrap().get(&ri).unwrap().1
     }
 
     pub fn get_ref_ri_phase_cost(&self, ref_id: u64, ri: u64, phase: u64) -> (u64, u64) {
-        return *self.ri_hists.get(&ref_id).unwrap().get(&ri).unwrap().1.get(&phase).unwrap();
+        *self.ri_hists.get(&ref_id).unwrap().get(&ri).unwrap().1.get(&phase).unwrap()
     }
 }
 
@@ -66,7 +60,7 @@ pub struct PPUC {
 }
 impl PartialOrd for PPUC {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.ppuc.partial_cmp(&other.ppuc)
+        Some(self.cmp(other))
     }
 }
 impl Ord for PPUC {
@@ -81,76 +75,49 @@ impl PartialEq for PPUC {
 }
 impl Eq for PPUC {}
 
-pub fn process_sample_head_cost(ri_hists: &mut HashMap<u64, HashMap<u64, (u64, HashMap<u64, (u64, u64)>)>>,
-                                phase_id_ref: u64,
-                                ri: u64,
-                                use_time: u64,
-                                next_phase_tuple: (u64, u64)) {
+pub fn process_sample_cost(
+    ri_hists: &mut HashMap<u64, HashMap<u64, (u64, HashMap<u64, (u64, u64)>)>>,
+    phase_id_ref: u64,
+    ri: u64,
+    use_time: u64,
+    next_phase_tuple: (u64, u64),
+    is_head_cost: bool,
+) {
     let phase_id = (phase_id_ref & 0xFF000000) >> 24;
-
-    //increment count
-    let ref_hist = ri_hists.entry(phase_id_ref).or_insert_with(|| HashMap::new());
+    let ref_hist = ri_hists.entry(phase_id_ref).or_default();
     let ri_tuple = ref_hist.entry(ri).or_insert_with(|| (0, HashMap::new()));
     ri_tuple.0 += 1;
 
-    //increment head costs
-    let this_phase_head_cost = std::cmp::min(next_phase_tuple.0 - use_time, ri);
-    let next_phase_head_cost = std::cmp::max(use_time as i64 + ri as i64 - next_phase_tuple.0 as i64,
-                                             0) as u64;
+    let this_phase_cost = std::cmp::min(next_phase_tuple.0 - use_time, ri);
+    let next_phase_cost = std::cmp::max(use_time as i64 + ri as i64 - next_phase_tuple.0 as i64, 0) as u64;
 
-
-    ri_tuple.1.entry(phase_id)
-        .or_insert_with(|| (0, 0)).0 += this_phase_head_cost;
-
-    if next_phase_head_cost > 0 {
-        ri_tuple.1.entry(next_phase_tuple.1)
-            .or_insert_with(|| (0, 0)).0 += next_phase_head_cost;
-    }
-}
-
-pub fn process_sample_tail_cost(ri_hists: &mut HashMap<u64, HashMap<u64, (u64, HashMap<u64, (u64, u64)>)>>,
-                                phase_id_ref: u64,
-                                ri: u64,
-                                use_time: u64,
-                                next_phase_tuple: (u64, u64)) {
-    let phase_id = (phase_id_ref & 0xFF000000) >> 24;
-
-    let ref_hist = ri_hists.entry(phase_id_ref)
-        .or_insert_with(|| HashMap::new());
-
-    //this heinous code exists so we can iterate through a HashMap while modifying it
-    let ris: Vec<&u64> = ref_hist.keys().collect();
-    let mut ris_keys: Vec<u64> = Vec::new();
-    for ri_other in ris {
-        ris_keys.push(*ri_other);
-    }
-
-    //increment tail costs
-    for ri_other in ris_keys {
-
-        //no tail cost if the other ri is greater
-        if ri_other >= ri {
-            continue;
+    if is_head_cost {
+        ri_tuple.1.entry(phase_id).or_insert_with(|| (0, 0)).0 += this_phase_cost;
+        if next_phase_cost > 0 {
+            ri_tuple.1.entry(next_phase_tuple.1).or_insert_with(|| (0, 0)).0 += next_phase_cost;
         }
-        let count_phase_cost_tuple = ref_hist.entry(ri_other)
-            .or_insert_with(|| (0, HashMap::new()));
+    } else {
+        let ris: Vec<u64> = ref_hist.keys().cloned().collect();
+        for &ri_other in ris.iter() {
+            if ri_other >= ri {
+                continue;
+            }
+            let count_phase_cost_tuple = ref_hist.entry(ri_other).or_insert_with(|| (0, HashMap::new()));
+            let this_phase_tail_cost = std::cmp::min(next_phase_tuple.0 - use_time, ri_other);
+            let next_phase_tail_cost = std::cmp::max(0, use_time as i64 + ri_other as i64 - next_phase_tuple.0 as i64) as u64;
 
-        let this_phase_tail_cost = std::cmp::min(next_phase_tuple.0 - use_time,
-                                                 ri_other);
-        let next_phase_tail_cost = std::cmp::max(0,
-                                                 use_time as i64 +
-                                                     ri_other as i64 -
-                                                     next_phase_tuple.0 as i64) as u64;
-
-        count_phase_cost_tuple.1.entry(phase_id)
-            .or_insert_with(|| (0, 0)).1 += this_phase_tail_cost;
-
-        if next_phase_tail_cost > 0 {
-            count_phase_cost_tuple.1.entry(next_phase_tuple.1)
-                .or_insert_with(|| (0, 0)).1 += next_phase_tail_cost;
+            count_phase_cost_tuple.1.entry(phase_id).or_insert_with(|| (0, 0)).1 += this_phase_tail_cost;
+            if next_phase_tail_cost > 0 {
+                count_phase_cost_tuple.1.entry(next_phase_tuple.1).or_insert_with(|| (0, 0)).1 += next_phase_tail_cost;
+            }
         }
     }
 }
+// pub fn process_sample_tail_cost(ri_hists: &mut HashMap<u64, HashMap<u64, (u64, HashMap<u64, (u64, u64)>)>>,
+//                                 phase_id_ref: u64,
+//                                 ri: u64,
+//                                 use_time: u64,
+//                                 next_phase_tuple: (u64, u64)) {}
 
 fn cshel_phase_ref_cost(sample_rate: u64,
                         phase: u64,
@@ -161,7 +128,7 @@ fn cshel_phase_ref_cost(sample_rate: u64,
     let mut old_cost = 0;
     let mut new_cost = 0;
     //if a set in a phase does not have this reference
-    if ri_hists.ri_hists.get(&ref_id) == None {
+    if !ri_hists.ri_hists.contains_key(&ref_id) {
         return 0;
     }
     let ri_hist = ri_hists.ri_hists.get(&ref_id).unwrap();
@@ -194,7 +161,7 @@ fn shel_phase_ref_cost(sample_rate: u64,
                        new_lease: u64,
                        ri_hists: &RIHists) -> u64 {
     //if a set in a phase does not have this reference
-    if ri_hists.ri_hists.get(&ref_id) == None {
+    if !ri_hists.ri_hists.contains_key(&ref_id) {
         return 0;
     }
     let ref_ri_hist: &HashMap<u64, (u64, HashMap<u64, (u64, u64)>)> =
@@ -253,7 +220,7 @@ pub fn get_ppuc(ref_id: u64,
                 (*lease_cost_table.get(k).unwrap() - *lease_cost_table.get(&base_lease).unwrap()) as f64),
             lease: *k,
             old_lease: base_lease,
-            ref_id: ref_id,
+            ref_id,
             new_hits: *lease_hit_table.get(k).unwrap() - *lease_hit_table.get(&base_lease).unwrap(),
         }
     ).collect()
@@ -264,14 +231,14 @@ pub fn get_avg_lease(distribution: &BinnedRIs,
                      bin: u64,
                      lease: u64) -> u64 {
     let mut total = 0;
-    for (ri, freq) in distribution.bin_ri_distribution.get(&bin).unwrap().get(&addr).unwrap() {
+    for (ri, freq) in distribution.bin_ri_distribution.get(&bin).unwrap().get(addr).unwrap() {
         if *ri <= lease && *ri > 0 {
             total += ri * freq;
         } else {
             total += lease * freq;
         }
     }
-    return total;
+    total
 }
 
 pub fn prl(bin_width: u64,
@@ -308,12 +275,12 @@ pub fn prl(bin_width: u64,
     let num_sets = set_mask as u64 + 1;
     let bin_target: u64 = bin_width * cache_size / num_sets;
     //threshold for meaningful dual lease
-    let min_alpha = 1.0 - (((2 << (discretize - 1)) as f64) - 1.5 as f64) /
-        (((2 << (discretize - 1)) as f64) - 1.0 as f64);
+    let min_alpha = 1.0 - (((2 << (discretize - 1)) as f64) - 1.5f64) /
+        (((2 << (discretize - 1)) as f64) - 1.0f64);
 
     if verbose {
         println!("---------Dump Binned RI Hists------------");
-        super::io::debug::print_binned_hists(&binned_ris);
+        super::io::debug::print_binned_hists(binned_ris);
         println!("---------Dump Reference Frequency per bin---");
         println!("{:?}", &binned_freqs);
     }
@@ -334,7 +301,7 @@ pub fn prl(bin_width: u64,
 
     for endpoint in bin_endpoints.iter() {
         for set in 0..num_sets {
-            bin_saturation.entry(*endpoint).or_insert(HashMap::new()).entry(set).or_insert(0.0);
+            bin_saturation.entry(*endpoint).or_default().entry(set).or_insert(0.0);
         }
     }
     //make all references have lease of 1
@@ -346,12 +313,12 @@ pub fn prl(bin_width: u64,
                 if binned_ris.bin_ri_distribution.get(&bin).unwrap().contains_key(&addr) {
                     let old_avg_lease = get_avg_lease(binned_ris, &addr, bin, 0);
                     let avg_lease = get_avg_lease(binned_ris, &addr, bin, 1);
-                    let impact = (avg_lease as f64 - old_avg_lease as f64) * &(sample_rate as f64);
+                    let impact = (avg_lease as f64 - old_avg_lease as f64) * (sample_rate as f64);
                     let bin_saturation_set = bin_saturation.get_mut(&bin).unwrap();
                     bin_saturation_set.insert(set, bin_saturation_set.get(&set).unwrap() + impact);
                 }
                 //init impact dict for later
-                impact_dict.entry(bin).or_insert(HashMap::new()).entry(set).or_insert(0.0);
+                impact_dict.entry(bin).or_default().entry(set).or_insert(0.0);
             }
         }
     }
@@ -397,21 +364,21 @@ pub fn prl(bin_width: u64,
         num_unsuitable = 0;
         let addr = new_lease.ref_id;
         for (bin, bin_sat_set) in &bin_saturation {
-            for (set, _sat) in bin_sat_set {
+            for set in bin_sat_set.keys() {
                 let mut impact: f64 = 0.0;
                 let set_addr = (addr & 0xFFFFFFFF) | (set << 32);
-                if binned_ris.bin_ri_distribution.get(&bin).unwrap().contains_key(&set_addr) {
+                if binned_ris.bin_ri_distribution.get(bin).unwrap().contains_key(&set_addr) {
                     let old_avg_lease = get_avg_lease(binned_ris, &set_addr, *bin, *leases
                         .get(&(addr & 0xFFFFFFFF)).unwrap());
                     let avg_lease = get_avg_lease(binned_ris, &set_addr, *bin, new_lease.lease);
-                    impact = (avg_lease as f64 - old_avg_lease as f64) * &(sample_rate as f64);
+                    impact = (avg_lease as f64 - old_avg_lease as f64) * (sample_rate as f64);
                     //don't assign leases that decrease bin saturation
-                    neg_impact = if impact >= 0.0 { false } else { true };
-                    impact_dict.get_mut(&bin).unwrap().insert(*set, impact as f64);
+                    neg_impact = impact < 0.0;
+                    impact_dict.get_mut(bin).unwrap().insert(*set, impact);
                 } else {
-                    impact_dict.get_mut(&bin).unwrap().insert(*set, 0 as f64);
+                    impact_dict.get_mut(bin).unwrap().insert(*set, 0f64);
                 }
-                if (bin_saturation.get(&bin).unwrap().get(&set).unwrap() + impact) > bin_target as f64 {
+                if (bin_saturation.get(bin).unwrap().get(set).unwrap() + impact) > bin_target as f64 {
                     num_unsuitable += 1;
                 }
             }
@@ -474,20 +441,18 @@ pub fn prl(bin_width: u64,
                     }
                     let new_capacity = sat + impact_dict.get(bin).unwrap().get(set).unwrap();
 
-                    if &new_capacity >= &(bin_target as f64) {
-                        if *impact_dict.get(bin).unwrap().get(set).unwrap() != 0.0 {
-                            //get minimum set alpha for bin
-                            let set_alpha = ((bin_target as f64) - sat) / *impact_dict.get(bin).unwrap().get(set).unwrap();
-                            if set_alpha < alpha {
-                                alpha = set_alpha;
-                            }
+                    if new_capacity >= (bin_target as f64) && *impact_dict.get(bin).unwrap().get(set).unwrap() != 0.0 {
+                        //get minimum set alpha for bin
+                        let set_alpha = ((bin_target as f64) - sat) / *impact_dict.get(bin).unwrap().get(set).unwrap();
+                        if set_alpha < alpha {
+                            alpha = set_alpha;
                         }
                     }
                 }
                 bin_ranks.insert(*bin, alpha);
             }
             for (num, key_val_pair) in bin_ranks.iter().enumerate() {
-                if sorted_bins.get_mut(num) == None {
+                if sorted_bins.get_mut(num).is_none() {
                     sorted_bins.push((*key_val_pair.0, *key_val_pair.1));
                 } else {
                     sorted_bins[num] = (*key_val_pair.0, *key_val_pair.1);
@@ -497,7 +462,7 @@ pub fn prl(bin_width: u64,
             acceptable_ratio = if num_full_bins == 0 { sorted_bins[0].1 } else { 0.0 };
 
             if acceptable_ratio > min_alpha {
-                dual_leases.insert(addr, (acceptable_ratio as f64, new_lease.lease));
+                dual_leases.insert(addr, (acceptable_ratio, new_lease.lease));
                 let mut print_string: String = String::new();
 
                 for (bin, sat_set) in &bin_saturation.clone() {
@@ -535,7 +500,7 @@ pub fn get_num_leases_per_phase(leases: &HashMap<u64, u64>) -> HashMap<u64, u64>
             .and_modify(|e| { *e += 1 })
             .or_insert(1);
     }
-    return references_per_phase;
+    references_per_phase
 }
 
 pub fn prune_leases_to_fit_llt(leases: HashMap<u64, u64>,
@@ -560,7 +525,7 @@ pub fn prune_leases_to_fit_llt(leases: HashMap<u64, u64>,
             let ri_hist = ri_hists.get_ref_hist(*reference);
             let mut count = 0;
             //need to sum over this 
-            for (_ri, count_cost_tuple) in ri_hist {
+            for count_cost_tuple in ri_hist.values() {
                 count += count_cost_tuple.0;
             }
             importance_per_reference.entry(*reference)
@@ -587,7 +552,7 @@ pub fn prune_leases_to_fit_llt(leases: HashMap<u64, u64>,
             //println!("Inserted successfully");
         }
     }
-    return (pruned_leases, pruned_dual_leases);
+    (pruned_leases, pruned_dual_leases)
 }
 
 //Output:
@@ -626,18 +591,16 @@ pub fn shel_cshel(cshel: bool,
     let phase_ids: Vec<&u64> = samples_per_phase.keys().collect();
 
     //since we can't run CSHEL without also running SHEL, don't output RI history twice
-    if !cshel {
-        if verbose {
-            println!("---------Dump RI Hists------------");
-            super::io::debug::print_ri_hists(&ri_hists);
-            println!("---------Dump Samples Per Phase---");
-            println!("{:?}", &samples_per_phase);
-        }
+    if !cshel && verbose {
+        println!("---------Dump RI Hists------------");
+        super::io::debug::print_ri_hists(ri_hists);
+        println!("---------Dump Samples Per Phase---");
+        println!("{:?}", &samples_per_phase);
     }
 
     //threshold for meaningful dual lease
-    let min_alpha: f64 = 1.0 - (((2 << (discretize - 1)) as f64) - 1.5 as f64) /
-        (((2 << (discretize - 1)) as f64) - 1.0 as f64);
+    let min_alpha: f64 = 1.0 - (((2 << (discretize - 1)) as f64) - 1.5f64) /
+        (((2 << (discretize - 1)) as f64) - 1.0f64);
     //initialize ppucs
     let mut ppuc_tree = BinaryHeap::new();
 
@@ -692,15 +655,15 @@ pub fn shel_cshel(cshel: bool,
                                              set_phase_id_ref,
                                              0,
                                              1,
-                                             &ri_hists),
+                                             ri_hists),
                 false => shel_phase_ref_cost(sample_rate,
                                              phase,
                                              set_phase_id_ref,
                                              0,
                                              1,
-                                             &ri_hists),
+                                             ri_hists),
             };
-            *cost_per_phase.entry(phase).or_insert(HashMap::new()).entry(set).or_insert(0) += new_cost;
+            *cost_per_phase.entry(phase).or_default().entry(set).or_insert(0) += new_cost;
         }
     }
     if verbose {
@@ -757,16 +720,16 @@ pub fn shel_cshel(cshel: bool,
                                                  set_phase_id_ref,
                                                  old_lease,
                                                  new_lease.lease,
-                                                 &ri_hists),
+                                                 ri_hists),
                     false => shel_phase_ref_cost(sample_rate,
                                                  phase,
                                                  set_phase_id_ref,
                                                  old_lease,
                                                  new_lease.lease,
-                                                 &ri_hists),
+                                                 ri_hists),
                 };
 
-                new_phase_ref_cost.entry(phase).or_insert(HashMap::new()).entry(set).or_insert(new_cost);
+                new_phase_ref_cost.entry(phase).or_default().entry(set).or_insert(new_cost);
                 if (new_cost + current_cost.get(&set).unwrap()) > *budget_per_phase.get(&phase).unwrap() {
                     acceptable_lease = false;
                 }
@@ -791,7 +754,7 @@ pub fn shel_cshel(cshel: bool,
                                      (new_lease.lease, *leases.get(&(&new_lease.ref_id & 0xFFFFFFFF))
                                          .unwrap()));
 
-            if last_lease_cost.get_mut(&phase) == None {
+            if last_lease_cost.get_mut(&phase).is_none() {
                 last_lease_cost.insert(phase, HashMap::new());
             }
             for set in 0..num_sets {
@@ -892,24 +855,28 @@ pub fn shel_cshel(cshel: bool,
                     let mut phase_alpha = 1.0;
                     for phase in &phase_ids {
                         for set in 0..num_sets {
-                            let set_phase_ref_cost = new_phase_ref_cost.get(&phase).unwrap().get(&set).unwrap();
+                            let set_phase_ref_cost = new_phase_ref_cost.get(phase).unwrap().get(&set).unwrap();
                             //if the phase would be effected by the lease assignment
                             if set_phase_ref_cost > &0 {
                                 //get phases that would be over budgeted by assigning the current lease.
                                 //then subtract the cost of their prior dual lease (which may be, due to the default, a non-dual lease)
                                 //and then add the spillover cost from the new leases
-                                let past_cost_actual = if last_lease_cost.get(&phase) == None { 0 } else if last_lease_cost.get(&phase).unwrap().get(&set) == None { 0 } else { last_lease_cost.get(&phase).unwrap().get(&set).unwrap().0 };
-                                if new_costs.get(&phase) == None {
+                                let past_cost_actual = if !last_lease_cost.contains_key(&phase) || last_lease_cost.get(phase).unwrap().get(&set).is_none() {
+                                    0
+                                } else {
+                                    last_lease_cost.get(phase).unwrap().get(&set).unwrap().0
+                                };
+                                if new_costs.get(&phase).is_none() {
                                     new_costs.insert(phase, HashMap::new());
                                 }
-                                let new_cost = cost_per_phase.get(&phase).unwrap().get(&set).unwrap() - past_cost_actual + (*set_phase_ref_cost as f64 * current_phase_alpha).round() as u64;
+                                let new_cost = cost_per_phase.get(phase).unwrap().get(&set).unwrap() - past_cost_actual + (*set_phase_ref_cost as f64 * current_phase_alpha).round() as u64;
                                 new_costs.get_mut(&phase).unwrap().insert(set, new_cost);
                                 //if no lease adjustment can be made to keep the phase from being over budget
                                 if new_costs.get(&phase).unwrap().get(&set).unwrap() > budget_per_phase.get(&phase).unwrap() {
                                     adjust_lease = false;
                                     break;
                                 }
-                                let remaining_budget = *budget_per_phase.get(&phase).unwrap() - new_costs.get(&phase).unwrap().get(&set).unwrap();
+                                let remaining_budget = *budget_per_phase.get(phase).unwrap() - new_costs.get(&phase).unwrap().get(&set).unwrap();
                                 //if cost of last lease was zero i.e., no prior lease for phase, then alpha will be 1 and will not be adjusted
                                 let past_cost_max = if past_cost_actual != 0 { last_lease_cost.get(phase).unwrap().get(&set).unwrap().1 } else { 0 };
                                 if past_cost_max != 0 {
@@ -933,18 +900,18 @@ pub fn shel_cshel(cshel: bool,
                             }
                             //new costs is equal to old cost
                             else {
-                                if new_costs.get(&phase) == None {
-                                    new_costs.insert(&phase, HashMap::new());
+                                if new_costs.get(&phase).is_none() {
+                                    new_costs.insert(phase, HashMap::new());
                                 }
-                                new_costs.get_mut(&phase).unwrap().insert(set, *cost_per_phase.get(&phase).unwrap().get(&set).unwrap());
+                                new_costs.get_mut(&phase).unwrap().insert(set, *cost_per_phase.get(phase).unwrap().get(&set).unwrap());
                             }
                         }
                     }
-                    if adjust_lease == true {
+                    if adjust_lease {
                         for phase in &phase_ids {
                             //if adjusting lease
                             for set in 0..num_sets {
-                                if new_alpha.get(&phase) != None {
+                                if new_alpha.get(&phase).is_some() {
                                     let old_phase_cost_max = last_lease_cost.get(phase).unwrap().get(&set).unwrap().1;
                                     let old_phase_ref = last_lease_cost.get(phase).unwrap().get(&set).unwrap().2;
                                     let new_phase_cost = (old_phase_cost_max as f64 * new_alpha.get(phase).unwrap()) as u64;
@@ -963,17 +930,17 @@ pub fn shel_cshel(cshel: bool,
                                         dual_lease_phases.push(**phase);
                                     }
 
-                                    last_lease_cost.get_mut(&phase).unwrap().insert(set, (new_phase_cost, old_phase_cost_max, old_phase_ref));
+                                    last_lease_cost.get_mut(phase).unwrap().insert(set, (new_phase_cost, old_phase_cost_max, old_phase_ref));
                                     //update phase costs
-                                    cost_per_phase.get_mut(&phase).unwrap().insert(set, *new_costs.get(&phase).unwrap().get(&set).unwrap() + new_phase_cost);
+                                    cost_per_phase.get_mut(phase).unwrap().insert(set, *new_costs.get(phase).unwrap().get(&set).unwrap() + new_phase_cost);
                                 }
                                 //if not adjusting the lease
                                 else {
                                     //update phase costs
-                                    cost_per_phase.get_mut(&phase).unwrap().insert(set, *new_costs.get(&phase).unwrap().get(&set).unwrap());
+                                    cost_per_phase.get_mut(phase).unwrap().insert(set, *new_costs.get(phase).unwrap().get(&set).unwrap());
                                     //fix floating point precision error leading to "overallocation"
-                                    if cost_per_phase.get(&phase).unwrap().get(&set).unwrap() > budget_per_phase.get(&phase).unwrap() {
-                                        cost_per_phase.get_mut(&phase).unwrap().insert(set, *budget_per_phase.get(&phase).unwrap());
+                                    if cost_per_phase.get(phase).unwrap().get(&set).unwrap() > budget_per_phase.get(phase).unwrap() {
+                                        cost_per_phase.get_mut(phase).unwrap().insert(set, *budget_per_phase.get(phase).unwrap());
                                     }
                                 }
                             }
@@ -1005,7 +972,7 @@ pub fn shel_cshel(cshel: bool,
             }
             //if last lease was a dual lease with alpha of 1 that didn't fill the budget, then it is actually a short lease and adjustments can be made to ensure 
             //there is only 1 dual lease per phase.
-            if alpha == 1.0 && set_full == false {
+            if alpha == 1.0 && !set_full {
                 //update leases
                 leases.insert(new_lease.ref_id & 0xFFFFFFFF, new_lease.lease);
                 //push new ppucs
@@ -1027,8 +994,8 @@ pub fn shel_cshel(cshel: bool,
 
                 //store cost of dual lease and store cost of lease with no dual lease and the reference for that lease
                 for set in 0..num_sets {
-                    if last_lease_cost.get_mut(&phase) == None {
-                        last_lease_cost.entry(phase).or_insert(HashMap::new());
+                    if last_lease_cost.get_mut(&phase).is_none() {
+                        last_lease_cost.entry(phase).or_default();
                     }
 
                     last_lease_cost.get_mut(&phase).unwrap().insert(set, ((*new_phase_ref_cost.get(&phase).unwrap().get(&set).unwrap() as f64 * alpha).round() as u64,
@@ -1054,7 +1021,7 @@ pub fn shel_cshel(cshel: bool,
             for (phase, num) in samples_per_phase.iter() {
                 for set in 0..num_sets {
                     println!("Debug: phase: {}. set: {} Allocation: {}", phase, set,
-                             cost_per_phase.get(&phase).unwrap().get(&set).unwrap() / (num * sample_rate));
+                             cost_per_phase.get(phase).unwrap().get(&set).unwrap() / (num * sample_rate));
                 }
             }
             /*
@@ -1070,12 +1037,12 @@ pub fn shel_cshel(cshel: bool,
         if verbose {
             let mut hits_from_old_lease = 0;
 
-            if lease_hits.get(&new_lease.ref_id).unwrap().get(&old_lease) != None {
+            if lease_hits.get(&new_lease.ref_id).unwrap().get(&old_lease).is_some() {
                 hits_from_old_lease = *lease_hits.get(&new_lease.ref_id).unwrap().get(&old_lease).unwrap();
             }
             let mut hits_from_new_lease = *lease_hits.get(&new_lease.ref_id).unwrap().get(&new_lease.lease).unwrap();
             let long_lease_percentage: f64;
-            if dual_leases.get(&new_lease.ref_id) != None {
+            if dual_leases.contains_key(&new_lease.ref_id) {
                 long_lease_percentage = dual_leases.get(&new_lease.ref_id).unwrap().0;
                 let hits_without_dual = hits_from_new_lease;
 
