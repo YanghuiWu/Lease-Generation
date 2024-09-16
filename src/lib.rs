@@ -4,5 +4,8 @@ mod helpers;
 pub mod io;
 /// Core algorithms
 pub mod lease_gen;
+pub mod cli;
+pub mod utils;
+
 #[cfg(test)]
 mod tests;

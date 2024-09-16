@@ -108,5 +108,4 @@ mod tests {
         assert_eq!(hist_struct.get_ref_ri_phase_cost(1, 50, 0).1, 10);
         assert_eq!(hist_struct.get_ref_ri_phase_cost(1, 50, 1).1, 40);
     }
-
 }

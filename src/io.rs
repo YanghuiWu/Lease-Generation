@@ -4,6 +4,8 @@ use std::collections::HashMap;
 use std::convert::TryInto;
 use std::fs::File;
 use std::io::Write;
+use crate::cli::Cli;
+use crate::lease_gen::LeaseResults;
 
 #[derive(Deserialize, Debug)]
 struct Sample {
@@ -103,6 +105,7 @@ pub fn get_prl_hists(
     //         bin_freqs_temp.entry(*key).or_insert(0);
     //     }
     // }
+
     // Ensure that all addresses are accounted for in each bin
     for bin_freqs_temp in bin_freqs.values_mut() {
         for key in &all_keys {
@@ -334,10 +337,7 @@ pub fn build_ri_hists(
 }
 
 pub fn dump_leases(
-    leases: HashMap<u64, u64>,
-    dual_leases: HashMap<u64, (f64, u64)>,
-    lease_hits: HashMap<u64, HashMap<u64, u64>>,
-    trace_length: u64,
+    lease_results: LeaseResults,
     output_file: &str,
     sampling_rate: u64,
     first_misses: usize,
@@ -345,24 +345,24 @@ pub fn dump_leases(
     let mut num_hits = 0;
     //create lease output vector
     let mut lease_vector: Vec<(u64, u64, u64, u64, f64)> = Vec::new();
-    for (&phase_address, &lease) in leases.iter() {
+    for (&phase_address, &lease) in lease_results.leases.iter() {
         let lease = if lease > 0 { lease } else { 1 };
         let phase = (phase_address & 0xFF000000) >> 24;
         let address = phase_address & 0x00FFFFFF;
-        if dual_leases.contains_key(&phase_address) {
+        if lease_results.dual_leases.contains_key(&phase_address) {
             lease_vector.push((
                 phase,
                 address,
                 lease,
-                dual_leases.get(&phase_address).unwrap().1,
-                1.0 - dual_leases.get(&phase_address).unwrap().0,
+                lease_results.dual_leases.get(&phase_address).unwrap().1,
+                1.0 - lease_results.dual_leases.get(&phase_address).unwrap().0,
             ));
         } else {
             lease_vector.push((phase, address, lease, 0, 1.0));
         }
     }
     lease_vector.sort_by_key(|a| (a.0, a.1)); //sort by phase and then by reference
-    //get number of predicted misses
+                                              //get number of predicted misses
     for (phase, address, lease_short, lease_long, percentage) in lease_vector.iter() {
         //reassemble phase address
         let phase_address = address | phase << 24;
@@ -371,8 +371,13 @@ pub fn dump_leases(
         //thus if an RI for a reference didn't occur during runtime
         //(i.e., the base lease of 1 that all references get)
         //we can assume the number of hits it gets is zero.
-        if lease_hits.get(&phase_address).unwrap().get(lease_short).is_some() {
-            num_hits += (*lease_hits
+        if lease_results.lease_hits
+            .get(&phase_address)
+            .unwrap()
+            .get(lease_short)
+            .is_some()
+        {
+            num_hits += (*lease_results.lease_hits
                 .get(&phase_address)
                 .unwrap()
                 .get(lease_short)
@@ -380,8 +385,13 @@ pub fn dump_leases(
                 * (percentage))
                 .round() as u64;
         }
-        if lease_hits.get(&phase_address).unwrap().get(lease_long).is_some() {
-            num_hits += (*lease_hits
+        if lease_results.lease_hits
+            .get(&phase_address)
+            .unwrap()
+            .get(lease_long)
+            .is_some()
+        {
+            num_hits += (*lease_results.lease_hits
                 .get(&phase_address)
                 .unwrap()
                 .get(lease_long)
@@ -396,7 +406,7 @@ pub fn dump_leases(
     file.write_all(
         format!(
             "Dump predicted miss count (no contention misses): {}\n",
-            trace_length - num_hits * sampling_rate + first_misses as u64
+            lease_results.trace_length - num_hits * sampling_rate + first_misses as u64
         )[..]
             .as_bytes(),
     ).expect("write failed");
@@ -418,11 +428,9 @@ pub fn dump_leases(
 // function for generating c-files
 pub fn gen_lease_c_file(
     mut lease_vector: Vec<(u64, u64, u64, u64, f64)>,
-    llt_size: u64,
+    cli: &Cli,
     max_num_scopes: u64,
-    mem_size: u64,
     output_file: String,
-    discretize_width: u64,
 ) {
     type LeaseData = (u64, u64, f64, bool);
     type PhaseLeaseMap = HashMap<u64, HashMap<u64, LeaseData>>;
@@ -451,18 +459,13 @@ pub fn gen_lease_c_file(
             .entry(*phase)
             .or_default()
             .entry(*address)
-            .or_insert((
-                *lease_short,
-                *lease_long,
-                *percentage,
-                lease_long > &0,
-            ));
+            .or_insert((*lease_short, *lease_long, *percentage, lease_long > &0));
     }
     let default_lease = 1;
 
     //make sure each phase can fit in the specified LLT
     for (phase, phase_leases) in phase_lease_arr.iter() {
-        if phase_leases.len() > llt_size as usize {
+        if phase_leases.len() > cli.llt_size as usize {
             println!(
                 "Leases for Phase {} don't fit in lease lookup table!",
                 phase
@@ -475,7 +478,7 @@ pub fn gen_lease_c_file(
     if *phases.iter().max().unwrap() > max_num_scopes {
         println!(
             "Error: phases cannot fit in specified {} byte memory",
-            mem_size
+            cli.mem_size
         );
         panic!();
     }
@@ -487,7 +490,7 @@ pub fn gen_lease_c_file(
     file.write_all(
         format!(
             "static uint32_t lease[{}] __attribute__((section (\".lease\"))) __attribute__ ((__used__)) = {{\n",
-            mem_size / 4)
+            cli.mem_size / 4)
             .as_bytes())
         .expect("write failed");
     file.write_all("// lease header\n".as_bytes())
@@ -517,39 +520,39 @@ pub fn gen_lease_c_file(
                 file.write_all(
                     format!("\t0x{:08x},\t// default lease\n", default_lease).as_bytes(),
                 )
-                    .expect("write failed");
+                .expect("write failed");
             } else if j == 1 {
                 file.write_all(
                     format!("\t0x{:08x},\t// long lease value\n", dual_lease_ref.1).as_bytes(),
                 )
-                    .expect("write failed");
+                .expect("write failed");
             } else if j == 2 {
                 file.write_all(
                     format!(
                         "\t0x{:08x},\t// short lease probability\n",
-                        discretize(dual_lease_ref.2, discretize_width)
+                        discretize(dual_lease_ref.2, cli.discretize_width)
                     )
-                        .as_bytes(),
+                    .as_bytes(),
                 )
-                    .expect("write failed");
+                .expect("write failed");
             } else if j == 3 {
                 file.write_all(
                     format!(
                         "\t0x{:08x},\t// num of references in phase\n",
                         phase_leases.len()
                     )
-                        .as_bytes(),
+                    .as_bytes(),
                 )
-                    .expect("write failed");
+                .expect("write failed");
             } else if j == 4 {
                 file.write_all(
                     format!(
                         "\t0x{:08x},\t// dual lease ref (word address)\n",
                         dual_lease_ref.0 >> 2
                     )
-                        .as_bytes(),
+                    .as_bytes(),
                 )
-                    .expect("write failed");
+                .expect("write failed");
             } else {
                 file.write_all(format!("\t0x{:08x},\t // unused\n", 0).as_bytes())
                     .expect("write failed");
@@ -562,7 +565,7 @@ pub fn gen_lease_c_file(
             file.write_all(format!("\t//{}\n\t", field_list[k]).as_bytes())
                 .expect("write failed");
 
-            for j in 0..llt_size {
+            for j in 0..cli.llt_size {
                 if j < phase_leases.len().try_into().unwrap() {
                     if k == 0 {
                         file.write_all(format!("0x{:08x}", lease_phase[j as usize].0).as_bytes())
@@ -576,10 +579,10 @@ pub fn gen_lease_c_file(
                         .expect("write failed");
                 }
                 //print delimiter
-                if j + 1 == llt_size && k == 1 && i + 1 == phase_lease_arr.len() {
+                if j + 1 == cli.llt_size && k == 1 && i + 1 == phase_lease_arr.len() {
                     file.write_all("\n".to_string().as_bytes())
                         .expect("write failed");
-                } else if j + 1 == llt_size {
+                } else if j + 1 == cli.llt_size {
                     file.write_all(",\n".to_string().as_bytes())
                         .expect("write failed");
                 } else if ((j + 1) % 10) == 0 {
@@ -597,9 +600,7 @@ pub fn gen_lease_c_file(
 }
 
 pub fn discretize(percentage: f64, discretization: u64) -> u64 {
-    let percentage_binary =
-        (percentage * ((2 << (discretization - 1)) as f64) - 1.0).round() as u64;
-    percentage_binary
+    (percentage * ((2 << (discretization - 1)) as f64) - 1.0).round() as u64
 }
 
 pub mod debug {

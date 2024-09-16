@@ -1,11 +1,12 @@
 pub fn float_min(a: f64, b: f64) -> f64 {
-    if a.lt(&b) {
-        return a;
-    }
-    b
+    // if a.lt(&b) {
+    //     return a;
+    // }
+    // b
+    a.min(b)
 }
 
-pub fn binary_search(vector: &Vec<(u64, u64)>, value: u64) -> Option<(u64, u64)> {
+pub fn binary_search(vector: &[(u64, u64)], value: u64) -> Option<(u64, u64)> {
     let mut min = 0;
     let mut max = vector.len() - 1;
 
