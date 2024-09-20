@@ -142,14 +142,14 @@ pub fn generate_output_files(
         context.misses_from_first_access,
     );
 
-    let output_lease_file_name = format!("{}/{}_{}_{}", cli.output, cap_index, method, "lease.c");
-
-    crate::io::gen_lease_c_file(
-        lease_vectors,
-        cli,
-        context.max_scopes,
-        output_lease_file_name,
-    );
+    // let output_lease_file_name = format!("{}/{}_{}_{}", cli.output, cap_index, method, "lease.c");
+    //
+    // crate::io::gen_lease_c_file(
+    //     lease_vectors,
+    //     cli,
+    //     context.max_scopes,
+    //     output_lease_file_name,
+    // );
 
     Ok(())
 }

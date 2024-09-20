@@ -351,17 +351,17 @@ pub fn dump_leases(
     println!("Writing output to: {}", output_file);
     let mut file = File::create(output_file).expect("create failed");
 
-    file.write_all(
-        format!(
-            "Dump predicted miss count (no contention misses): {}\n",
-            lease_results.trace_length - num_hits * sampling_rate + first_misses as u64
-        )[..]
-            .as_bytes(),
-    )
-        .expect("write failed");
-
-    file.write_all("Dump formated leases\n".as_bytes())
-        .expect("write failed");
+    // file.write_all(
+    //     format!(
+    //         "Dump predicted miss count (no contention misses): {}\n",
+    //         lease_results.trace_length - num_hits * sampling_rate + first_misses as u64
+    //     )[..]
+    //         .as_bytes(),
+    // )
+    //     .expect("write failed");
+    //
+    // file.write_all("Dump formated leases\n".as_bytes())
+    //     .expect("write failed");
 
     for (phase, address, lease_short, lease_long, percentage) in lease_vector.iter() {
         file.write_all(
