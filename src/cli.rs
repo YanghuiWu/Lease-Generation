@@ -58,3 +58,23 @@ pub struct Cli {
     #[arg(short = 'E', long, default_value = "yes")]
     pub empirical_sample_rate: String,
 }
+
+impl Default for Cli {
+    fn default() -> Self {
+        Cli {
+            input: "tests/clam/gemm_small_trace.csv".to_string(),
+            output: "tests/out".to_string(),
+            cache_size: 256,
+            set_associativity: 0,
+            prl: 0,
+            cshel: false,
+            verbose: false,
+            llt_size: 128,
+            mem_size: 65536,
+            discretize_width: 9,
+            debug: false,
+            sampling_rate: 256,
+            empirical_sample_rate: "yes".to_string(),
+        }
+    }
+}

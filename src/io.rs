@@ -1,11 +1,12 @@
+use crate::cli::Cli;
+use crate::lease_gen::{process_sample_cost, LeaseResults, RIHists};
+use csv::ReaderBuilder;
 use serde::{Deserialize, Serialize};
 use std::collections::BinaryHeap;
 use std::collections::HashMap;
 use std::convert::TryInto;
 use std::fs::File;
 use std::io::Write;
-use crate::cli::Cli;
-use crate::lease_gen::LeaseResults;
 
 #[derive(Deserialize, Debug)]
 struct Sample {
@@ -15,11 +16,127 @@ struct Sample {
     time: u64,
 }
 
-#[allow(dead_code)] //This code is not used in the current implementation
-#[derive(Serialize)]
-struct PhaseTime {
-    phase_id: u16,
-    start_time: u64,
+// Function to parse a sample from CSV and extract relevant fields
+fn parse_sample(sample: &Sample, set_mask: u32) -> (u64, u64, u64, u64) {
+    let tag = u32::from_str_radix(&sample.tag, 16).expect("Invalid tag format");
+    let set = (tag & set_mask) as u64;
+    let phase_id_ref = u64::from_str_radix(&sample.phase_id_ref, 16).expect("Invalid phase_id_ref");
+    let set_phase_id_ref = phase_id_ref | (set << 32);
+    let ri = u64::from_str_radix(&sample.backward_ri, 16).expect("Invalid backward_ri");
+    (set_phase_id_ref, ri, phase_id_ref, set)
+}
+
+/// Builds Reuse Interval (RI) histograms from a given input CSV file.
+///
+/// The function processes samples from the input file to generate RI histograms in the following form:
+/// `{ref_id: {ri: (count, {phase_id: (head_cost, tail_cost)})}}`
+///
+/// - **Head cost**: Accumulation of cost from reuses with length `ri`, which may span phase boundaries.
+/// - **Tail cost**: Accumulation of cost from reuses greater than `ri`, which may span phase boundaries.
+///
+/// # Parameters
+/// - `input_file`: Path to the input CSV file containing sample data.
+/// - `cshel`: Boolean flag indicating whether to process C-SHEL data.
+/// - `set_mask`: Mask used to extract the set from the tag.
+///
+/// # Returns
+/// A tuple containing:
+/// - `RIHists`: A struct containing the RI histograms.
+/// - `HashMap<u64, u64>`: A map of samples per phase.
+/// - `usize`: The number of first misses.
+/// - `u64`: The sampling rate.
+///
+/// # Example
+/// ```
+/// use clam::io::build_ri_hists;
+/// let (ri_hists, samples_per_phase, first_misses, sampling_rate) = build_ri_hists("input.csv", true, 0xFFFF);
+/// ```
+pub fn build_ri_hists(
+    input_file: &str,
+    cshel: bool,
+    set_mask: u32,
+) -> (RIHists, HashMap<u64, u64>, usize, u64) {
+    let (phase_transitions, first_misses, sampling_rate) = build_phase_transitions(input_file);
+    let mut rdr = ReaderBuilder::new()
+        .has_headers(true)
+        .from_path(input_file)
+        .expect("Failed to open input file");
+
+    let mut ri_hists = HashMap::new();
+    let mut samples_per_phase = HashMap::new();
+
+    let mut process_sample = |sample: Sample, is_head: bool| {
+        let (set_phase_id_ref, ri, phase_id_ref, _) = parse_sample(&sample, set_mask);
+        let reuse_time = sample.time;
+
+        let mut ri_signed = ri as i32;
+        let use_time = if ri_signed < 0 {
+            reuse_time - (!ri_signed + 1) as u64
+        } else {
+            reuse_time - ri_signed as u64
+        };
+
+        if ri_signed < 0 {
+            ri_signed = 0xFFFFFF; // Canonical value for negatives
+        }
+
+        let next_phase_tuple = crate::helpers::binary_search(&phase_transitions, use_time)
+            .unwrap_or((reuse_time + 1, 0));
+
+        if cshel {
+            process_sample_cost(
+                &mut ri_hists,
+                set_phase_id_ref,
+                ri_signed as u64,
+                use_time,
+                next_phase_tuple,
+                is_head,
+            );
+            if is_head {
+                let phase_id = (phase_id_ref & 0xFF000000) >> 24;
+                *samples_per_phase.entry(phase_id).or_insert_with(|| 0) += 1;
+            }
+        } else {
+            let phase_id = (phase_id_ref & 0xFF000000) >> 24;
+            *samples_per_phase.entry(phase_id).or_insert(0) += 1;
+            ri_hists
+                .entry(set_phase_id_ref)
+                .or_insert_with(HashMap::new)
+                .entry(ri_signed as u64)
+                .and_modify(|e| e.0 += 1)
+                .or_insert((1, HashMap::new()))
+                .1
+                .entry(phase_id)
+                .or_insert((0, 0));
+        }
+    };
+
+    if cshel {
+        println!("Processing C-SHEL data");
+        for is_head in &[true, false] {
+            rdr = ReaderBuilder::new()
+                .has_headers(true)
+                .from_path(input_file)
+                .expect("Failed to open input file");
+            for result in rdr.deserialize() {
+                let sample: Sample = result.expect("Failed to deserialize sample");
+                process_sample(sample, *is_head);
+            }
+        }
+    } else {
+        println!("Processing SHEL data");
+        for result in rdr.deserialize() {
+            let sample: Sample = result.expect("Failed to deserialize sample");
+            process_sample(sample, false);
+        }
+    }
+
+    (
+        RIHists::new(ri_hists),
+        samples_per_phase,
+        first_misses,
+        sampling_rate,
+    )
 }
 
 pub fn get_prl_hists(
@@ -27,34 +144,44 @@ pub fn get_prl_hists(
     num_bins: u64,
     set_mask: u32,
 ) -> (super::lease_gen::BinnedRIs, super::lease_gen::BinFreqs, u64) {
-    let mut curr_bin: u64 = 0;
-    let mut curr_bin_dict = HashMap::<u64, u64>::new();
-    let mut bin_freqs = HashMap::<u64, HashMap<u64, u64>>::new();
-    let mut bin_ri_distributions = HashMap::<u64, HashMap<u64, HashMap<u64, u64>>>::new();
-    let mut curr_ri_distribution_dict = HashMap::<u64, HashMap<u64, u64>>::new();
     let mut last_address: u64 = 0;
     let mut all_keys: Vec<u64> = Vec::new();
 
-    bin_freqs.insert(0, curr_bin_dict.clone());
-    bin_ri_distributions.insert(0, curr_ri_distribution_dict.clone());
+    // bin_freqs.insert(0, curr_bin_dict.clone());
+    // bin_ri_distributions.insert(0, curr_ri_distribution_dict.clone());
 
-    let mut rdr = csv::ReaderBuilder::new()
-        .has_headers(true)
-        .from_path(input_file)
-        .unwrap();
-    for result in rdr.deserialize() {
-        let sample: Sample = result.unwrap();
-        last_address = sample.time;
+    // First pass to find the last address
+    {
+        let mut rdr = ReaderBuilder::new()
+            .has_headers(true)
+            .from_path(input_file)
+            .expect("Failed to open input file");
+
+        for result in rdr.deserialize() {
+            let sample: Sample = result.expect("Failed to deserialize sample");
+            last_address = sample.time;
+        }
     }
-    let bin_width = (last_address as f64 / (num_bins as f64)).ceil() as u64;
-    let mut rdr = csv::ReaderBuilder::new()
+
+    let bin_width = ((last_address as f64) / (num_bins as f64)).ceil() as u64;
+
+    let mut bin_freqs = HashMap::<u64, HashMap<u64, u64>>::new();
+    let mut bin_ri_distributions = HashMap::<u64, HashMap<u64, HashMap<u64, u64>>>::new();
+
+    let mut curr_bin: u64 = 0;
+    let mut curr_bin_dict = HashMap::<u64, u64>::new();
+    let mut curr_ri_distribution_dict = HashMap::<u64, HashMap<u64, u64>>::new();
+
+    let mut rdr = ReaderBuilder::new()
         .has_headers(true)
         .from_path(input_file)
-        .unwrap();
+        .expect("Failed to open input file");
+
     for result in rdr.deserialize() {
         let sample: Sample = result.unwrap();
 
         //if outside of current bin, moved to the next
+        // TODO: Change to while?
         if sample.time > curr_bin + bin_width {
             //store the RI and frequency data for the old bin
             bin_freqs.insert(curr_bin, curr_bin_dict.clone());
@@ -64,32 +191,20 @@ pub fn get_prl_hists(
             curr_ri_distribution_dict.clear();
             curr_bin += bin_width;
         }
-        let tag = u32::from_str_radix(&sample.tag, 16).unwrap();
-        let set = (tag & set_mask) as u64;
 
-        let addr = u64::from_str_radix(&sample.phase_id_ref, 16).unwrap() | (set << 32);
-        let ri = u64::from_str_radix(&sample.backward_ri, 16).unwrap();
+        let (addr, ri, _, _) = parse_sample(&sample, set_mask);
 
-        if curr_bin_dict.contains_key(&addr) {
-            curr_bin_dict.insert(addr, curr_bin_dict.get(&addr).unwrap() + 1);
-        } else {
-            curr_bin_dict.insert(addr, 1);
-        }
-        //if the address isn't a key in the outer level hashmap,
-        //add a hashmap corresponding to that key; then add the
-        //key value pair (ri,1) to that hashmap
-        //
-        //if the address is a key in the outer level hashmap,
-        //check to see if the current ri is a key in the corresponding inner hashmap.
-        //if yes, then increment the count for that RI, if not, insert a new key value pair (ri,1).
+        *curr_bin_dict.entry(addr).or_insert(0) += 1;
+
+        // Update RI distributions
         *curr_ri_distribution_dict
             .entry(addr)
-            .or_default()
+            .or_insert_with(HashMap::new)
             .entry(ri)
             .or_insert(0) += 1;
 
-        //create an array of all found references
-        if !all_keys.iter().any(|&i| i == addr) {
+        // Collect all unique addresses
+        if !all_keys.contains(&addr) {
             all_keys.push(addr);
         }
     }
@@ -158,182 +273,17 @@ pub fn build_phase_transitions(input_file: &str) -> (Vec<(u64, u64)>, usize, u64
     let mut sorted_samples: Vec<_> = sample_hash.iter().collect();
     sorted_samples.sort_by_key(|a| a.0);
 
-    //get phase transitions
-    let mut phase_transitions = HashMap::new(); //(time,phase start)
-    let mut phase = 0;
-    phase_transitions.insert(0, phase);
+    // Get phase transitions
+    let mut phase_transitions = vec![(0u64, 0u64)]; // (time, phase_id)
+    let mut current_phase = 0u64;
 
-    for s in sorted_samples.iter() {
-        if *s.1 != phase {
-            phase_transitions.insert(*s.0, *s.1);
-            phase = *s.1;
+    for (&time, &phase_id) in &sorted_samples {
+        if phase_id != current_phase {
+            phase_transitions.push((time, phase_id));
+            current_phase = phase_id;
         }
     }
-
-    let mut sorted_transitions: Vec<_> = phase_transitions.iter().collect();
-    sorted_transitions.sort_by_key(|a| a.0);
-
-    (
-        sorted_transitions
-            .iter()
-            .map(|&x| (*(x.0), *(x.1)))
-            .collect(),
-        first_misses,
-        sampling_rate,
-    )
-}
-
-//Build ri hists in the following form
-//{ref_id,
-//  {ri,
-//    (count,{phase_id,(head_cost,tail_cost)})}}
-//
-// Head cost refers to the accumulation of
-// cost from reuses with length ri, which may span
-// phase boundaries.
-
-// Tail cost refers to the accumulation of cost from reuses greater than ri.
-// This cost may span a phase boundary
-pub fn build_ri_hists(
-    input_file: &str,
-    cshel: bool,
-    set_mask: u32,
-) -> (super::lease_gen::RIHists, HashMap<u64, u64>, usize, u64) {
-    let (phase_transitions, first_misses, sampling_rate) = build_phase_transitions(input_file);
-    let mut rdr = csv::ReaderBuilder::new()
-        .has_headers(true)
-        .from_path(input_file)
-        .unwrap();
-
-    let mut ri_hists = HashMap::new();
-    let mut samples_per_phase = HashMap::new();
-
-    //Don't need to calculate head or tail costs for PRL or CLAM or SHEL,
-    if cshel {
-        println!("before first pass!");
-        for result in rdr.deserialize() {
-            let sample: Sample = result.unwrap();
-            let ri = u32::from_str_radix(&sample.backward_ri, 16).unwrap();
-            let reuse_time = sample.time;
-            let use_time;
-
-            let mut ri_signed = ri as i32;
-
-            if ri_signed < 0 {
-                use_time = reuse_time - (!ri_signed + 1) as u64;
-                ri_signed = 16777215; //canonical value for negatives
-            } else {
-                use_time = reuse_time - ri_signed as u64;
-            }
-
-            let phase_id_ref = u64::from_str_radix(&sample.phase_id_ref, 16).unwrap();
-
-            let tag = u32::from_str_radix(&sample.tag, 16).unwrap();
-            let set = (tag & set_mask) as u64;
-            let set_phase_id_ref = phase_id_ref | set << 32;
-
-            let next_phase_tuple = match super::helpers::binary_search(&phase_transitions, use_time)
-            {
-                Some(v) => v,
-                None => (reuse_time + 1, 0),
-            };
-            super::lease_gen::process_sample_cost(
-                &mut ri_hists,
-                set_phase_id_ref,
-                ri_signed as u64,
-                use_time,
-                next_phase_tuple,
-                true,
-            );
-
-            let phase_id = (phase_id_ref & 0xFF000000) >> 24;
-            *samples_per_phase.entry(phase_id).or_insert_with(|| 0) += 1;
-        }
-
-        let mut rdr = csv::ReaderBuilder::new()
-            .has_headers(true)
-            .from_path(input_file)
-            .unwrap();
-        println!("before second pass!");
-        //second pass for tail costs
-        for result in rdr.deserialize() {
-            let sample: Sample = result.unwrap();
-            let ri = u32::from_str_radix(&sample.backward_ri, 16).unwrap();
-
-            let reuse_time = sample.time;
-            let use_time;
-
-            let mut ri_signed = ri as i32;
-
-            if ri_signed < 0 {
-                use_time = reuse_time - (!ri_signed + 1) as u64;
-                ri_signed = 16777215; //canonical value for negatives
-            } else {
-                use_time = reuse_time - ri_signed as u64;
-            }
-
-            let phase_id_ref = u64::from_str_radix(&sample.phase_id_ref, 16).unwrap();
-            let tag = u32::from_str_radix(&sample.tag, 16).unwrap();
-            let set = (tag & set_mask) as u64;
-            let set_phase_id_ref = phase_id_ref | set << 32;
-
-            let next_phase_tuple = match super::helpers::binary_search(&phase_transitions, use_time)
-            {
-                Some(v) => v,
-                None => (reuse_time + 1, 0),
-            };
-
-            super::lease_gen::process_sample_cost(
-                &mut ri_hists,
-                set_phase_id_ref,
-                ri_signed as u64,
-                use_time,
-                next_phase_tuple,
-                false,
-            );
-        }
-    }
-    //if not doing C-SHEL generates RI distribution with head
-    //and tail costs set to 0 (significantly faster)
-    else {
-        for result in rdr.deserialize() {
-            let sample: Sample = result.unwrap();
-            let mut ri = u64::from_str_radix(&sample.backward_ri, 16).unwrap();
-            let _reuse_time = sample.time;
-            //if sample is negative, there is no reuse
-            let ri_signed = ri as i32;
-            if ri_signed < 0 {
-                ri = 16777215;
-            }
-
-            let phase_id_ref = u64::from_str_radix(&sample.phase_id_ref, 16).unwrap();
-            let tag = u32::from_str_radix(&sample.tag, 16).unwrap();
-            let set = (tag & set_mask) as u64;
-            let set_phase_id_ref = phase_id_ref | set << 32;
-            let phase_id = (phase_id_ref & 0xFF000000) >> 24;
-            *samples_per_phase.entry(phase_id).or_insert(0) += 1;
-            //if the reference isn't in the distrubtion add it
-            //if an ri for that reference isn't in the distrubtion
-            //add it as key with a value of (ri_count,{phaseID,(0,0)))
-            //if an ri for that reference is in the distribution
-            //increment the ri count by 1
-            ri_hists
-                .entry(set_phase_id_ref)
-                .or_insert(HashMap::new())
-                .entry(ri)
-                .and_modify(|e| e.0 += 1)
-                .or_insert((1, HashMap::new()))
-                .1
-                .entry(phase_id)
-                .or_insert((0, 0));
-        }
-    }
-    (
-        super::lease_gen::RIHists::new(ri_hists),
-        samples_per_phase,
-        first_misses,
-        sampling_rate,
-    )
+    (phase_transitions, first_misses, sampling_rate)
 }
 
 pub fn dump_leases(
@@ -371,13 +321,15 @@ pub fn dump_leases(
         //thus if an RI for a reference didn't occur during runtime
         //(i.e., the base lease of 1 that all references get)
         //we can assume the number of hits it gets is zero.
-        if lease_results.lease_hits
+        if lease_results
+            .lease_hits
             .get(&phase_address)
             .unwrap()
             .get(lease_short)
             .is_some()
         {
-            num_hits += (*lease_results.lease_hits
+            num_hits += (*lease_results
+                .lease_hits
                 .get(&phase_address)
                 .unwrap()
                 .get(lease_short)
@@ -385,13 +337,15 @@ pub fn dump_leases(
                 * (percentage))
                 .round() as u64;
         }
-        if lease_results.lease_hits
+        if lease_results
+            .lease_hits
             .get(&phase_address)
             .unwrap()
             .get(lease_long)
             .is_some()
         {
-            num_hits += (*lease_results.lease_hits
+            num_hits += (*lease_results
+                .lease_hits
                 .get(&phase_address)
                 .unwrap()
                 .get(lease_long)
@@ -409,7 +363,8 @@ pub fn dump_leases(
             lease_results.trace_length - num_hits * sampling_rate + first_misses as u64
         )[..]
             .as_bytes(),
-    ).expect("write failed");
+    )
+    .expect("write failed");
 
     file.write_all("Dump formated leases\n".as_bytes())
         .expect("write failed");
@@ -421,7 +376,8 @@ pub fn dump_leases(
                 phase, address, lease_short, lease_long, percentage
             )[..]
                 .as_bytes(),
-        ).expect("write failed");
+        )
+        .expect("write failed");
     }
     lease_vector
 }

@@ -1,5 +1,3 @@
-
-
 pub fn calculate_max_scopes(mem_size: u64, llt_size: u64) -> u64 {
     mem_size / ((2 * llt_size + 16) * 4)
 }

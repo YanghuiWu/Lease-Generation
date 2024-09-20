@@ -53,7 +53,15 @@ impl RIHists {
     }
 
     pub fn get_ref_ri_phase_cost(&self, ref_id: u64, ri: u64, phase: u64) -> (u64, u64) {
-        *self.ri_hists.get(&ref_id).unwrap().get(&ri).unwrap().1.get(&phase).unwrap()
+        *self
+            .ri_hists
+            .get(&ref_id)
+            .unwrap()
+            .get(&ri)
+            .unwrap()
+            .1
+            .get(&phase)
+            .unwrap()
     }
 }
 
@@ -82,7 +90,6 @@ impl PartialEq for PPUC {
     }
 }
 impl Eq for PPUC {}
-
 
 pub struct LeaseOperationContext<'a> {
     pub ri_hists: &'a RIHists,
@@ -168,7 +175,6 @@ impl LeaseResults {
         self.dual_leases = pruned_dual_leases;
     }
 }
-
 
 pub fn process_sample_cost(
     ri_hists: &mut HashMap<u64, HashMap<u64, (u64, HashMap<u64, (u64, u64)>)>>,
@@ -335,7 +341,7 @@ pub fn get_ppuc(
             ppuc: ((*lease_hit_table.get(k).unwrap() - *lease_hit_table.get(&base_lease).unwrap())
                 as f64
                 / (*lease_cost_table.get(k).unwrap() - *lease_cost_table.get(&base_lease).unwrap())
-                as f64),
+                    as f64),
             lease: *k,
             old_lease: base_lease,
             ref_id,
@@ -389,7 +395,8 @@ pub fn prl(
     let bin_target: u64 = bin_width * cli.cache_size / num_sets;
     //threshold for meaningful dual lease
     let min_alpha = 1.0
-        - (((2 << (cli.discretize_width - 1)) as f64) - 1.5f64) / (((2 << (cli.discretize_width - 1)) as f64) - 1.0f64);
+        - (((2 << (cli.discretize_width - 1)) as f64) - 1.5f64)
+            / (((2 << (cli.discretize_width - 1)) as f64) - 1.0f64);
 
     if cli.verbose {
         println!("---------Dump Binned RI Hists------------");
@@ -433,7 +440,8 @@ pub fn prl(
                 {
                     let old_avg_lease = get_avg_lease(binned_ris, &addr, bin, 0);
                     let avg_lease = get_avg_lease(binned_ris, &addr, bin, 1);
-                    let impact = (avg_lease as f64 - old_avg_lease as f64) * (context.sample_rate as f64);
+                    let impact =
+                        (avg_lease as f64 - old_avg_lease as f64) * (context.sample_rate as f64);
                     let bin_saturation_set = bin_saturation.get_mut(&bin).unwrap();
                     bin_saturation_set.insert(set, bin_saturation_set.get(&set).unwrap() + impact);
                 }
@@ -477,7 +485,14 @@ pub fn prl(
     loop {
         new_lease = match ppuc_tree.pop() {
             Some(i) => i,
-            None => return Some(LeaseResults{leases, dual_leases, lease_hits, trace_length}),
+            None => {
+                return Some(LeaseResults {
+                    leases,
+                    dual_leases,
+                    lease_hits,
+                    trace_length,
+                })
+            }
         };
 
         // if let Some(ppuc) = ppuc_tree.pop() {
@@ -514,7 +529,8 @@ pub fn prl(
                         *leases.get(&(addr & 0xFFFFFFFF)).unwrap(),
                     );
                     let avg_lease = get_avg_lease(binned_ris, &set_addr, *bin, new_lease.lease);
-                    impact = (avg_lease as f64 - old_avg_lease as f64) * (context.sample_rate as f64);
+                    impact =
+                        (avg_lease as f64 - old_avg_lease as f64) * (context.sample_rate as f64);
                     //don't assign leases that decrease bin saturation
                     neg_impact = impact < 0.0;
                     impact_dict.get_mut(bin).unwrap().insert(*set, impact);
@@ -741,11 +757,7 @@ pub fn get_num_leases_per_phase(leases: &HashMap<u64, u64>) -> HashMap<u64, u64>
 //dual_leases: HashMap<u64, (f64, u64)>
 //lease_hits: HashMap<u64, HashMap<u64,u64>>
 //trace_length: u64
-pub fn shel_cshel(
-    cshel: bool,
-    cli: &Cli,
-    context: &LeaseOperationContext,
-) -> Option<LeaseResults> {
+pub fn shel_cshel(cshel: bool, cli: &Cli, context: &LeaseOperationContext) -> Option<LeaseResults> {
     let mut new_lease: PPUC;
     let mut cost_per_phase: HashMap<u64, HashMap<u64, u64>> = HashMap::new();
     let mut budget_per_phase: HashMap<u64, u64> = HashMap::new();
@@ -771,7 +783,8 @@ pub fn shel_cshel(
 
     //threshold for meaningful dual lease
     let min_alpha: f64 = 1.0
-        - (((2 << (cli.discretize_width - 1)) as f64) - 1.5f64) / (((2 << (cli.discretize_width - 1)) as f64) - 1.0f64);
+        - (((2 << (cli.discretize_width - 1)) as f64) - 1.5f64)
+            / (((2 << (cli.discretize_width - 1)) as f64) - 1.0f64);
     //initialize ppucs
     let mut ppuc_tree = BinaryHeap::new();
 
@@ -828,8 +841,22 @@ pub fn shel_cshel(
         for set in 0..num_sets {
             let set_phase_id_ref = phase_id_ref | (set << 32);
             let new_cost = match cshel {
-                true => cshel_phase_ref_cost(context.sample_rate, phase, set_phase_id_ref, 0, 1, context.ri_hists),
-                false => shel_phase_ref_cost(context.sample_rate, phase, set_phase_id_ref, 0, 1, context.ri_hists),
+                true => cshel_phase_ref_cost(
+                    context.sample_rate,
+                    phase,
+                    set_phase_id_ref,
+                    0,
+                    1,
+                    context.ri_hists,
+                ),
+                false => shel_phase_ref_cost(
+                    context.sample_rate,
+                    phase,
+                    set_phase_id_ref,
+                    0,
+                    1,
+                    context.ri_hists,
+                ),
             };
             *cost_per_phase
                 .entry(phase)
@@ -846,7 +873,14 @@ pub fn shel_cshel(
         new_lease = match ppuc_tree.pop() {
             //TERMINATION CONDITION 1
             Some(i) => i,
-            None => return Some(LeaseResults{leases, dual_leases, lease_hits, trace_length}),
+            None => {
+                return Some(LeaseResults {
+                    leases,
+                    dual_leases,
+                    lease_hits,
+                    trace_length,
+                })
+            }
         };
         let phase = (new_lease.ref_id & 0xFFFFFFFF) >> 24;
         let ref_id = new_lease.ref_id & 0xFFFFFFFF;
@@ -873,7 +907,12 @@ pub fn shel_cshel(
         //if we've already assigned dual leases to all phases, end
         if dual_lease_phases.len() == cost_per_phase.len() {
             //TERMINATION CONDITION 2
-            return Some(LeaseResults{leases, dual_leases, lease_hits, trace_length});
+            return Some(LeaseResults {
+                leases,
+                dual_leases,
+                lease_hits,
+                trace_length,
+            });
         }
         //if we've already assigned a dual lease for the phase
         if dual_lease_phases.contains(&phase) {
@@ -1071,7 +1110,7 @@ pub fn shel_cshel(
                                     cost_per_phase.get(phase).unwrap().get(&set).unwrap()
                                         - past_cost_actual
                                         + (*set_phase_ref_cost as f64 * current_phase_alpha).round()
-                                        as u64;
+                                            as u64;
                                 new_costs.get_mut(&phase).unwrap().insert(set, new_cost);
                                 //if no lease adjustment can be made to keep the phase from being over budget
                                 if new_costs.get(&phase).unwrap().get(&set).unwrap()
@@ -1296,7 +1335,8 @@ pub fn shel_cshel(
                         "Debug: phase: {}. set: {} Allocation: {}",
                         phase,
                         set,
-                        cost_per_phase.get(phase).unwrap().get(&set).unwrap() / (num * context.sample_rate)
+                        cost_per_phase.get(phase).unwrap().get(&set).unwrap()
+                            / (num * context.sample_rate)
                     );
                 }
             }
@@ -1324,9 +1364,8 @@ pub fn shel_cshel(
                     .get(&old_lease)
                     .unwrap();
             }
-            let mut hits_from_new_lease = *lease_hits
-                .get(&new_lease.ref_id)?
-                .get(&new_lease.lease)?;
+            let mut hits_from_new_lease =
+                *lease_hits.get(&new_lease.ref_id)?.get(&new_lease.lease)?;
             let long_lease_percentage: f64;
             if dual_leases.contains_key(&new_lease.ref_id) {
                 long_lease_percentage = dual_leases.get(&new_lease.ref_id).unwrap().0;
