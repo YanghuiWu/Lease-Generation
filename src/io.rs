@@ -45,12 +45,6 @@ fn parse_sample(sample: &Sample, set_mask: u32) -> (u64, u64, u64, u64) {
 /// - `HashMap<u64, u64>`: A map of samples per phase.
 /// - `usize`: The number of first misses.
 /// - `u64`: The sampling rate.
-///
-/// # Example
-/// ```
-/// use clam::io::build_ri_hists;
-/// let (ri_hists, samples_per_phase, first_misses, sampling_rate) = build_ri_hists("input.csv", true, 0xFFFF);
-/// ```
 pub fn build_ri_hists(
     input_file: &str,
     cshel: bool,
@@ -312,7 +306,7 @@ pub fn dump_leases(
         }
     }
     lease_vector.sort_by_key(|a| (a.0, a.1)); //sort by phase and then by reference
-                                              //get number of predicted misses
+    //get number of predicted misses
     for (phase, address, lease_short, lease_long, percentage) in lease_vector.iter() {
         //reassemble phase address
         let phase_address = address | phase << 24;
@@ -364,7 +358,7 @@ pub fn dump_leases(
         )[..]
             .as_bytes(),
     )
-    .expect("write failed");
+        .expect("write failed");
 
     file.write_all("Dump formated leases\n".as_bytes())
         .expect("write failed");
@@ -377,7 +371,7 @@ pub fn dump_leases(
             )[..]
                 .as_bytes(),
         )
-        .expect("write failed");
+            .expect("write failed");
     }
     lease_vector
 }
@@ -476,39 +470,39 @@ pub fn gen_lease_c_file(
                 file.write_all(
                     format!("\t0x{:08x},\t// default lease\n", default_lease).as_bytes(),
                 )
-                .expect("write failed");
+                    .expect("write failed");
             } else if j == 1 {
                 file.write_all(
                     format!("\t0x{:08x},\t// long lease value\n", dual_lease_ref.1).as_bytes(),
                 )
-                .expect("write failed");
+                    .expect("write failed");
             } else if j == 2 {
                 file.write_all(
                     format!(
                         "\t0x{:08x},\t// short lease probability\n",
                         discretize(dual_lease_ref.2, cli.discretize_width)
                     )
-                    .as_bytes(),
+                        .as_bytes(),
                 )
-                .expect("write failed");
+                    .expect("write failed");
             } else if j == 3 {
                 file.write_all(
                     format!(
                         "\t0x{:08x},\t// num of references in phase\n",
                         phase_leases.len()
                     )
-                    .as_bytes(),
+                        .as_bytes(),
                 )
-                .expect("write failed");
+                    .expect("write failed");
             } else if j == 4 {
                 file.write_all(
                     format!(
                         "\t0x{:08x},\t// dual lease ref (word address)\n",
                         dual_lease_ref.0 >> 2
                     )
-                    .as_bytes(),
+                        .as_bytes(),
                 )
-                .expect("write failed");
+                    .expect("write failed");
             } else {
                 file.write_all(format!("\t0x{:08x},\t // unused\n", 0).as_bytes())
                     .expect("write failed");
