@@ -14,17 +14,17 @@ pub mod io;
 pub mod lease_gen;
 pub mod utils;
 
-pub fn run_clam(cli: Cli) -> Result<(), Box<dyn Error>> {
+pub fn run_this(cli: Cli) -> f64 {
     let max_scopes = calculate_max_scopes(cli.mem_size, cli.llt_size);
     let num_ways = calculate_num_ways(cli.set_associativity, cli.cache_size);
     let set_mask = calculate_set_mask(cli.cache_size, num_ways);
+    println!("num_ways: {}, set_mask: {}", num_ways, set_mask);
 
-    let re = Regex::new(r"/(clam|shel).*/(.*?)\.(txt|csv)$")?;
+    let re = Regex::new(r"/(clam|shel).*/(.*?)\.(txt|csv)$").unwrap();
     let search_string = cli.input.to_lowercase();
     let cap = re
         .captures(&search_string)
-        .ok_or("Failed to capture regex")?;
-    println!("Running {} on file {}", &cap[1], &cap[2]);
+        .ok_or("Failed to capture regex").unwrap();
     let empirical_rate = cli.empirical_sample_rate.to_lowercase();
 
     let (ri_hists, samples_per_phase, misses_from_first_access, empirical_sample_rate) =
@@ -50,12 +50,10 @@ pub fn run_clam(cli: Cli) -> Result<(), Box<dyn Error>> {
         run_prl(&cli, &context, &cap);
     }
 
-    run_shel_cshel(&cli, &context, &cap);
-
-    Ok(())
+    run_shel_cshel(&cli, &context, &cap)
 }
 
-pub fn run_prl(cli: &Cli, context: &LeaseOperationContext, cap: &regex::Captures) {
+pub fn run_prl(cli: &Cli, context: &LeaseOperationContext, cap: &regex::Captures) -> f64 {
     let (binned_ri_distributions, binned_freqs, bin_width) =
         crate::io::get_prl_hists(&cli.input, cli.prl, context.set_mask);
 
@@ -72,41 +70,41 @@ pub fn run_prl(cli: &Cli, context: &LeaseOperationContext, cap: &regex::Captures
         &binned_ri_distributions,
         &binned_freqs,
     )
-    .unwrap();
+        .unwrap();
     lease_results.prune_leases_to_fit_llt(context.ri_hists, cli.llt_size);
 
-    generate_output_files(
-        lease_results,
-        cli,
-        context,
-        &output_file_name,
-        "prl",
-        &cap[2],
-    )
-    .unwrap();
+    // generate_output_files(
+    //     lease_results,
+    //     cli,
+    //     context,
+    //     &output_file_name,
+    //     "prl",
+    //     &cap[2],
+    // ).unwrap();
+    get_misses(lease_results, context, cli)
 }
 
-pub fn run_shel_cshel(cli: &Cli, context: &LeaseOperationContext, cap: &regex::Captures) {
+pub fn run_shel_cshel(cli: &Cli, context: &LeaseOperationContext, cap: &regex::Captures) -> f64 {
     println!("running {}", &cap[1]);
     let output_file_name = format!("{}/{}_{}_{}", cli.output, &cap[2], &cap[1], "leases");
 
     let mut lease_results = crate::lease_gen::shel_cshel(false, cli, context).unwrap();
     lease_results.prune_leases_to_fit_llt(context.ri_hists, cli.llt_size);
 
-    generate_output_files(
-        lease_results,
-        cli,
-        context,
-        &output_file_name,
-        &cap[1],
-        &cap[2],
-    )
-    .unwrap();
-
-    if cli.cshel {
-        println!("Running C-SHEL.");
-        run_cshel(cli, cap, context);
-    }
+    // generate_output_files(
+    //     lease_results,
+    //     cli,
+    //     context,
+    //     &output_file_name,
+    //     &cap[1],
+    //     &cap[2],
+    // ).unwrap();
+    //
+    // if cli.cshel {
+    //     println!("Running C-SHEL.");
+    //     run_cshel(cli, cap, context);
+    // }
+    get_misses(lease_results, context, cli)
 }
 
 pub fn run_cshel(cli: &Cli, cap: &regex::Captures, context: &LeaseOperationContext) {
@@ -116,18 +114,68 @@ pub fn run_cshel(cli: &Cli, cap: &regex::Captures, context: &LeaseOperationConte
     lease_results.prune_leases_to_fit_llt(context.ri_hists, cli.llt_size);
 
     let output_file_name = format!("{}/{}_{}_{}", cli.output, &cap[2], "c-shel", "leases");
-    generate_output_files(
-        lease_results,
-        cli,
-        context,
-        &output_file_name,
-        "c-shel",
-        &cap[2],
-    )
-    .unwrap();
+    // generate_output_files(
+    //     lease_results,
+    //     cli,
+    //     context,
+    //     &output_file_name,
+    //     "c-shel",
+    //     &cap[2],
+    // ).unwrap();
 }
 
-pub fn generate_output_files(
+
+pub fn get_misses(
+    lease_results: LeaseResults,
+    context: &LeaseOperationContext,
+    cli: &Cli,
+) -> f64 {
+    let (length, misses) = io::dump_leases(
+        lease_results,
+        &cli.output,
+        context.sample_rate,
+        context.misses_from_first_access,
+    );
+
+    let miss_rate:f64 = misses as f64 / length as f64;
+    println!("length: {}, hits: {}, misses: {}", length, length - misses, miss_rate);
+
+    miss_rate
+
+    // let (length, hits) = io::dump_leases(
+    //     lease_results,
+    //     &cli.output,
+    //     context.sample_rate,
+    //     context.misses_from_first_access,
+    // );
+    //
+    // let miss_rate:f64 = (length - hits) as f64 / length as f64;
+    // println!("length: {}, hits: {}, misses: {}", length, hits, miss_rate);
+    //
+    // miss_rate
+}
+
+pub fn calculate_next_cache_size(cache_size: usize) -> usize {
+    if cache_size == 1 {
+        2
+    } else if cache_size < 34 {
+        cache_size + 2
+    } else {
+        let mut target = (cache_size * 11 + 5) / 10; // Equivalent to rounding cache_size * 1.1
+        if target % 2 != 0 {
+            target += 1; // Ensure target is even
+        }
+        let next_power_of_two = (cache_size + 1).next_power_of_two();
+        if target < next_power_of_two {
+            target
+        } else {
+            next_power_of_two
+        }
+    }
+}
+
+
+pub fn generate_output_files_(
     lease_results: LeaseResults,
     cli: &Cli,
     context: &LeaseOperationContext,

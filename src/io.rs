@@ -1,7 +1,7 @@
 use crate::cli::Cli;
 use crate::lease_gen::{process_sample_cost, LeaseResults, RIHists};
 use csv::ReaderBuilder;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::collections::BinaryHeap;
 use std::collections::HashMap;
 use std::convert::TryInto;
@@ -63,6 +63,7 @@ pub fn build_ri_hists(
         let (set_phase_id_ref, ri, phase_id_ref, _) = parse_sample(&sample, set_mask);
         let reuse_time = sample.time;
 
+        let test = ri as u32;
         let mut ri_signed = ri as i32;
         let use_time = if ri_signed < 0 {
             reuse_time - (!ri_signed + 1) as u64
@@ -118,7 +119,7 @@ pub fn build_ri_hists(
             }
         }
     } else {
-        println!("Processing SHEL data");
+        // println!("Processing SHEL data");
         for result in rdr.deserialize() {
             let sample: Sample = result.expect("Failed to deserialize sample");
             process_sample(sample, false);
@@ -230,7 +231,7 @@ pub fn get_prl_hists(
 }
 
 pub fn build_phase_transitions(input_file: &str) -> (Vec<(u64, u64)>, usize, u64) {
-    println!("Reading input from: {}", input_file);
+    // println!("Reading input from: {}", input_file);
     let mut rdr = csv::ReaderBuilder::new()
         .has_headers(true)
         .from_reader(File::open(input_file).unwrap());
@@ -260,7 +261,7 @@ pub fn build_phase_transitions(input_file: &str) -> (Vec<(u64, u64)>, usize, u64
     }
     //empircally calculate sampling rate
     let sampling_rate = (last_sample_time as f64 / sample_num as f64).round() as u64;
-    println!("empirical sampling_rate:{}", sampling_rate);
+    // println!("empirical sampling_rate:{}", sampling_rate);
     //every data block is associated with at least one miss in the absense of hardware prefetching.
     let first_misses = u_tags.len();
 
@@ -280,12 +281,13 @@ pub fn build_phase_transitions(input_file: &str) -> (Vec<(u64, u64)>, usize, u64
     (phase_transitions, first_misses, sampling_rate)
 }
 
+#[allow(unused_variables)]
 pub fn dump_leases(
     lease_results: LeaseResults,
     output_file: &str,
     sampling_rate: u64,
     first_misses: usize,
-) -> Vec<(u64, u64, u64, u64, f64)> {
+) -> (u64, u64) {
     let mut num_hits = 0;
     //create lease output vector
     let mut lease_vector: Vec<(u64, u64, u64, u64, f64)> = Vec::new();
@@ -293,6 +295,7 @@ pub fn dump_leases(
         let lease = if lease > 0 { lease } else { 1 };
         let phase = (phase_address & 0xFF000000) >> 24;
         let address = phase_address & 0x00FFFFFF;
+        // println!("phase_address:{}, phase: {}, address: {:x}, lease: {:x}", phase_address, phase, address, lease);
         if lease_results.dual_leases.contains_key(&phase_address) {
             lease_vector.push((
                 phase,
@@ -308,8 +311,11 @@ pub fn dump_leases(
     lease_vector.sort_by_key(|a| (a.0, a.1)); //sort by phase and then by reference
     //get number of predicted misses
     for (phase, address, lease_short, lease_long, percentage) in lease_vector.iter() {
+
         //reassemble phase address
         let phase_address = address | phase << 24;
+
+       // println!("phase: {}, address: {:x}, lease_short: {:x}, lease_long: {:x}, percentage: {}", phase, address, lease_short, lease_long, percentage);
         //we are assuming that our sampling captures all RIS
         //by assuming the distribution is normal
         //thus if an RI for a reference didn't occur during runtime
@@ -347,9 +353,38 @@ pub fn dump_leases(
                 * (1.0 - percentage))
                 .round() as u64;
         }
+        if lease_results
+            .lease_hits
+            .get(&phase_address)
+            .unwrap()
+            .get(lease_long)
+            .is_some()
+        {
+            println!(
+                "phase: {}, address: {:x}, lease_short: {:x}, lease_long: {:x}, hits: {}",
+                phase,
+                address,
+                lease_short,
+                lease_long,
+                *lease_results
+                    .lease_hits
+                    .get(&phase_address)
+                    .unwrap()
+                    .get(lease_long)
+                    .unwrap()
+            );
+        }
+
+        println!("num hits: {}", num_hits);
     }
+    let output_file = format!("{}/leases.txt", output_file);
     println!("Writing output to: {}", output_file);
     let mut file = File::create(output_file).expect("create failed");
+
+    // println!("trace length: {}, num hits: {}, first misses: {}", lease_results.trace_length, num_hits, first_misses);
+
+    // write trace length, num hits seperated by commas
+
 
     // file.write_all(
     //     format!(
@@ -373,7 +408,10 @@ pub fn dump_leases(
         )
             .expect("write failed");
     }
-    lease_vector
+
+    // lease_vector
+    println!("sampling rate: {}, first misses: {}", sampling_rate, first_misses);
+    (lease_results.trace_length, lease_results.trace_length - num_hits * sampling_rate + first_misses as u64)
 }
 // function for generating c-files
 pub fn gen_lease_c_file(
