@@ -85,7 +85,7 @@ pub fn run_prl(cli: &Cli, context: &LeaseOperationContext, cap: &regex::Captures
 }
 
 pub fn run_shel_cshel(cli: &Cli, context: &LeaseOperationContext, cap: &regex::Captures) -> f64 {
-    println!("running {}", &cap[1]);
+    print!("running {}: ", &cap[1]);
     let output_file_name = format!("{}/{}_{}_{}", cli.output, &cap[2], &cap[1], "leases");
 
     let mut lease_results = crate::lease_gen::shel_cshel(false, cli, context).unwrap();

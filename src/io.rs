@@ -375,7 +375,7 @@ pub fn dump_leases(
             );
         }
 
-        println!("num hits: {}", num_hits);
+        // println!("num hits: {}", num_hits);
     }
     let output_file = format!("{}/leases.txt", output_file);
     println!("Writing output to: {}", output_file);
