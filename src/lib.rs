@@ -138,7 +138,7 @@ pub fn get_misses(
     );
 
     let miss_rate:f64 = misses as f64 / length as f64;
-    println!("length: {}, hits: {}, misses: {}", length, length - misses, miss_rate);
+    println!("length: {}, hits: {}, CARL misses (Unbounded Cache): {}", length, length - misses, miss_rate);
 
     miss_rate
 

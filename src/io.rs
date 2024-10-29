@@ -378,7 +378,7 @@ pub fn dump_leases(
         // println!("num hits: {}", num_hits);
     }
     let output_file = format!("{}/leases.txt", output_file);
-    println!("Writing output to: {}", output_file);
+    // println!("Writing output to: {}", output_file);
     let mut file = File::create(output_file).expect("create failed");
 
     // println!("trace length: {}, num hits: {}, first misses: {}", lease_results.trace_length, num_hits, first_misses);
