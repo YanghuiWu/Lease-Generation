@@ -360,19 +360,19 @@ pub fn dump_leases(
             .get(lease_long)
             .is_some()
         {
-            println!(
-                "phase: {}, address: {:x}, lease_short: {:x}, lease_long: {:x}, hits: {}",
-                phase,
-                address,
-                lease_short,
-                lease_long,
-                *lease_results
-                    .lease_hits
-                    .get(&phase_address)
-                    .unwrap()
-                    .get(lease_long)
-                    .unwrap()
-            );
+            // println!(
+            //     "phase: {}, address: {:x}, lease_short: {:x}, lease_long: {:x}, hits: {}",
+            //     phase,
+            //     address,
+            //     lease_short,
+            //     lease_long,
+            //     *lease_results
+            //         .lease_hits
+            //         .get(&phase_address)
+            //         .unwrap()
+            //         .get(lease_long)
+            //         .unwrap()
+            // );
         }
 
         // println!("num hits: {}", num_hits);

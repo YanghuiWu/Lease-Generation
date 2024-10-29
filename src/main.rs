@@ -16,7 +16,7 @@ fn grinding() {
 
     let mut cache_size: usize = 1;
     while cache_size <= 256 {
-        print!("\n{}, ", cache_size);
+        // print!("\n{}, ", cache_size);
 
         let mut cli = Cli::default();
         cli.input = trace_path.to_string();
@@ -29,6 +29,7 @@ fn grinding() {
             .unwrap();
         cache_size = calculate_next_cache_size(cache_size);
         // break;
+        println!();
     }
 
     wtr.flush().expect("TODO: panic message");

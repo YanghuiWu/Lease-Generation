@@ -18,7 +18,7 @@ pub fn run_this(cli: Cli) -> f64 {
     let max_scopes = calculate_max_scopes(cli.mem_size, cli.llt_size);
     let num_ways = calculate_num_ways(cli.set_associativity, cli.cache_size);
     let set_mask = calculate_set_mask(cli.cache_size, num_ways);
-    println!("num_ways: {}, set_mask: {}", num_ways, set_mask);
+    println!("{} num_ways", num_ways);
 
     let re = Regex::new(r"/(clam|shel).*/(.*?)\.(txt|csv)$").unwrap();
     let search_string = cli.input.to_lowercase();
@@ -138,7 +138,7 @@ pub fn get_misses(
     );
 
     let miss_rate:f64 = misses as f64 / length as f64;
-    println!("length: {}, hits: {}, CARL misses (Unbounded Cache): {}", length, length - misses, miss_rate);
+    println!("length: {}, [CARL (UnboundCache) hits: {}, misses ratio: {}]", length, length - misses, miss_rate);
 
     miss_rate
 
