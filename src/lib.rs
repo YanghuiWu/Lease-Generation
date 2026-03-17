@@ -1,9 +1,11 @@
+#![allow(unused)]
 use crate::cli::Cli;
-use crate::io::build_ri_hists;
+use crate::io::{build_ri_hists, build_ri_hists_from_iter, Sample2};
 use crate::lease_gen::{LeaseOperationContext, LeaseResults};
 use crate::utils::*;
 use regex::Regex;
 use std::error::Error;
+use crate::io::debug::print_binned_hists;
 
 pub mod cli;
 /// Small miscellaneous functions used
@@ -13,12 +15,13 @@ pub mod io;
 /// Core algorithms
 pub mod lease_gen;
 pub mod utils;
+mod tests;
 
 pub fn run_this(cli: Cli) -> f64 {
     let max_scopes = calculate_max_scopes(cli.mem_size, cli.llt_size);
     let num_ways = calculate_num_ways(cli.set_associativity, cli.cache_size);
     let set_mask = calculate_set_mask(cli.cache_size, num_ways);
-    println!("{} num_ways", num_ways);
+    print!("{} num_ways, {} blocks -- ", num_ways, cli.cache_size);
 
     let re = Regex::new(r"/(clam|shel).*/(.*?)\.(txt|csv)$").unwrap();
     let search_string = cli.input.to_lowercase();
@@ -46,6 +49,47 @@ pub fn run_this(cli: Cli) -> f64 {
         max_scopes,
     };
 
+    // println!("prl{}", cli.prl);
+    if cli.prl > 0 {
+        run_prl(&cli, &context, &cap);
+    }
+
+    run_shel_cshel(&cli, &context, &cap)
+}
+
+pub fn run_this_trace(cli: Cli, trace: &Vec<(u32, i32, u32, bool)>) -> f64 {
+    let max_scopes = calculate_max_scopes(cli.mem_size, cli.llt_size);
+    let num_ways = calculate_num_ways(cli.set_associativity, cli.cache_size);
+    let set_mask = calculate_set_mask(cli.cache_size, num_ways);
+    print!("{} num_ways, {} blocks -- ", num_ways, cli.cache_size);
+
+    let re = Regex::new(r"/(clam|shel).*/(.*?)\.(txt|csv)$").unwrap();
+    let search_string = cli.input.to_lowercase();
+    let cap = re
+        .captures(&search_string)
+        .ok_or("Failed to capture regex").unwrap();
+    let empirical_rate = cli.empirical_sample_rate.to_lowercase();
+
+    let (ri_hists, samples_per_phase, misses_from_first_access, empirical_sample_rate) =
+        build_ri_hists_from_iter(trace, cli.cshel, set_mask);
+
+    let sample_rate = if empirical_rate == "no" {
+        cli.sampling_rate
+    } else {
+        empirical_sample_rate
+    };
+
+    // Create the context struct
+    let context = LeaseOperationContext {
+        ri_hists: &ri_hists,
+        sample_rate,
+        samples_per_phase: &samples_per_phase,
+        set_mask,
+        misses_from_first_access,
+        max_scopes,
+    };
+
+    // println!("prl{}", cli.prl);
     if cli.prl > 0 {
         run_prl(&cli, &context, &cap);
     }
@@ -63,7 +107,7 @@ pub fn run_prl(cli: &Cli, context: &LeaseOperationContext, cap: &regex::Captures
 
     let output_file_name = format!("{}/{}_{}_{}", cli.output, &cap[2], "prl", "leases");
 
-    let mut lease_results = crate::lease_gen::prl(
+    let mut lease_results = lease_gen::prl(
         cli,
         context,
         bin_width,
@@ -85,10 +129,10 @@ pub fn run_prl(cli: &Cli, context: &LeaseOperationContext, cap: &regex::Captures
 }
 
 pub fn run_shel_cshel(cli: &Cli, context: &LeaseOperationContext, cap: &regex::Captures) -> f64 {
-    print!("running {}: ", &cap[1]);
+    print!("Run {}: ", &cap[1]);
     let output_file_name = format!("{}/{}_{}_{}", cli.output, &cap[2], &cap[1], "leases");
 
-    let mut lease_results = crate::lease_gen::shel_cshel(false, cli, context).unwrap();
+    let mut lease_results = lease_gen::shel_cshel(false, cli, context).unwrap();
     lease_results.prune_leases_to_fit_llt(context.ri_hists, cli.llt_size);
 
     // generate_output_files(
@@ -138,7 +182,7 @@ pub fn get_misses(
     );
 
     let miss_rate:f64 = misses as f64 / length as f64;
-    println!("length: {}, [CARL (UnboundCache) hits: {}, misses ratio: {}]", length, length - misses, miss_rate);
+    // println!("length: {}, [CARL (UnboundCache) misses: {}, misses ratio: {}]", length, misses, miss_rate);
 
     miss_rate
 

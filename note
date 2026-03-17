@@ -1,0 +1,49 @@
+clam 1.0
+B. Reber <breber@cs.rochester.edu> M. Gould <mdg2838@rit.edu> W. Wu <ywu86@ur.rochester.edu>
+Lease assignment generator for phased traces
+
+USAGE:
+    clam [FLAGS] [OPTIONS] <INPUT> <OUTPUT> -s <CACHE_SIZE>
+
+ARGS:
+    <INPUT>     Sets the input file name
+    <OUTPUT>    Sets the output file Location
+
+FLAGS:
+    -c               calculate leases for CSHEL
+    -d               enable even more information about lease assignment
+    -V               output information about lease assignment
+    -h, --help       Prints help information
+        --version    Prints version information
+
+OPTIONS:
+    -s <CACHE_SIZE>                   target cache size for algorithms
+    -D <DISCRETIZE_WIDTH>             bit width avaiable for discretized short lease probability
+                                      [default: 9]
+    -E <EMPIRICAL_SAMPLE_RATE>        Use given or empirically derived sampling rate [default: yes]
+    -L <LLT_SIZE>                     Number of elements in the lease lookup table [default: 128]
+    -M <MEM_SIZE>                     total memory allocated for lease information [default: 65536]
+    -p <PRL>                          calculate leases for prl (only for non_phased sampling files)
+                                      [default: 5]
+    -S <SAMPLING_RATE>                benchmark sampling rate [default: 256]
+    -a <SET ASSOCIATIVITY>            set associativity of the cache being targeted [default: 0]
+
+
+
+
+
+
+
+e.g.  tests/clam/access_trace.txt tests/out --cache-size 1024
+
+
+Original Ben's Code:
+cargo run -- tests/clam/access_trace.txt tests/out -s 64
+plot_opt_miss_ratio.py clam/gemm_xs_clam_miss_curve clam/gemm_xs_clam_miss_curve.png
+
+or use
+cargo run
+to use default
+
+export RUSTFLAGS="-Awarnings"
+unset RUSTFLAGS

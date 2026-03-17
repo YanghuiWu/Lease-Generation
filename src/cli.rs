@@ -64,7 +64,7 @@ impl Default for Cli {
         Cli {
             input: "tests/clam/gemm_small_trace.csv".to_string(),
             output: "tests/out".to_string(),
-            cache_size: 256,
+            cache_size: 64,
             set_associativity: 0,
             prl: 0,
             cshel: false,
