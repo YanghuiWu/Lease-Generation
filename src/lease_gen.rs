@@ -1,5 +1,5 @@
 use crate::cli::Cli;
-use core::cmp::Ordering;
+use core::{cmp::Ordering, panic};
 use std::collections::{BinaryHeap, HashMap};
 
 #[derive(Debug, Clone)]
@@ -127,47 +127,104 @@ impl LeaseResults {
         let mut pruned_dual_leases: HashMap<u64, (f64, u64)> = HashMap::new();
         let references_per_phase: HashMap<u64, u64> = get_num_leases_per_phase(&self.leases);
 
+        // print self.leases
+        // if self.leases.is_empty() {
+        //     return;
+        // } else {
+        //     for (reference, lease) in self.leases.iter() {
+        //         if *lease != 1 {
+        //             println!("Reference: {:x} Lease: {:x}", reference, lease);
+        //         }
+        //     }
+        // }
+
         for (phase_id, _lease_count) in references_per_phase.iter() {
             //loop through phases
             let mut importance_per_reference: HashMap<u64, u64> = HashMap::new();
 
             //this is globally sorting leases by importance
             //need to be locally sorting them per phase
-            for (reference, _lease) in self.leases.iter() {
+            for (reference, &_lease) in self.leases.iter() {
                 let reference_phase_id = (reference & 0xFF000000) >> 24;
                 //if this reference is not in the current phase, pass instead of inserting
                 if reference_phase_id != *phase_id {
                     continue;
                 }
-                let ri_hist = ri_hists.get_ref_hist(*reference);
+                // let ri_hist = ri_hists.get_ref_hist(*reference);
                 let mut count = 0;
                 //need to sum over this
-                for count_cost_tuple in ri_hist.values() {
-                    count += count_cost_tuple.0;
-                }
+                // for (_ri, count_cost_tuple) in ri_hist {
+                //     count += count_cost_tuple.0;
+                //     // Summing ri counts for this reference
+                //     // if _ri > _lease {
+                //     //     break;
+                //     //     // counting only hits for ri <= lease
+                //     // }
+                // }
+
+                // reset count to be its lease length
+                count = _lease;
                 importance_per_reference.entry(*reference).or_insert(count);
             }
 
             let mut importance_vec: Vec<_> = importance_per_reference.iter().collect();
             importance_vec.sort_by(|a, b| a.1.cmp(b.1).reverse());
 
-            for i in 0..llt_size {
-                if i == importance_vec.len() as u64 {
-                    break;
-                }
+            // print importance_vec
+            // for (reference, importance) in &importance_vec {
+            //     if **importance == 1 {
+            //         continue;
+            //     }
+            //     println!("Reference: {:x} Importance: {:x}", reference, importance);
+            // }
 
-                //add the top llt_size most important leases to the pruned vector
-                let reference_id = importance_vec[i as usize].0;
-                pruned_leases
-                    .entry(*reference_id)
-                    .or_insert(*self.leases.get(reference_id).unwrap());
+            // for i in 0..llt_size {
+            //     if i == importance_vec.len() as u64 {
+            //         break;
+            //     }
 
+            //     //add the top llt_size most important leases to the pruned vector
+            //     let reference_id = importance_vec[i as usize].0;
+            //     pruned_leases
+            //         .entry(*reference_id)
+            //         .or_insert(*self.leases.get(reference_id).unwrap());
+
+            //     if self.dual_leases.contains_key(reference_id) {
+            //         pruned_dual_leases
+            //             .entry(*reference_id)
+            //             .or_insert(*self.dual_leases.get(reference_id).unwrap());
+            //     }
+            //     //println!("Inserted successfully");
+            // }
+
+            let mut count = 0;
+            let mut idx = 0;
+            while count < llt_size && idx < importance_vec.len() {
+                let reference_id = importance_vec[idx].0;
+                let lease_value = *self.leases.get(reference_id).unwrap();
                 if self.dual_leases.contains_key(reference_id) {
-                    pruned_dual_leases
-                        .entry(*reference_id)
-                        .or_insert(*self.dual_leases.get(reference_id).unwrap());
+                    // Always add dual leases
+                    if !pruned_leases.contains_key(reference_id) {
+                        pruned_leases.insert(*reference_id, lease_value);
+                        count += 1;
+                    }
+                    if !pruned_dual_leases.contains_key(reference_id) {
+                        pruned_dual_leases.insert(*reference_id, *self.dual_leases.get(reference_id).unwrap());
+                    }
+                } else {
+                    // Only skip lease_value == 1 if llt_size < importance_vec.len()
+                    if lease_value == 1 && llt_size < importance_vec.len() as u64 {
+                        // skip
+                    } else {
+                        if !pruned_leases.contains_key(reference_id) {
+                            pruned_leases.insert(*reference_id, lease_value);
+                            count += 1;
+                        } else {
+                            panic!("Reference {} already exists in pruned leases", reference_id);
+                        }
+                    }
                 }
-                //println!("Inserted successfully");
+                idx += 1;
             }
         }
         // (pruned_leases, pruned_dual_leases)
