@@ -476,8 +476,9 @@ pub fn get_prl_hists(
 ///
 /// # Example
 /// ```
+/// use clam::io::build_phase_transitions_from_iter;
 /// let trace = vec![(0x01000000, 5, 42), (0x02000000, 3, 43)];
-/// let (transitions, first_misses, sampling_rate) = build_phase_transitions_from_iter(&trace);
+/// let transitions = build_phase_transitions_from_iter(&trace);
 /// ```
 pub fn build_phase_transitions_from_iter(trace: &Vec<(u32, i32, u32)>) -> (Vec<(u64, u64)>) {
     // let mut u_tags = std::collections::HashMap::<u32, bool>::new();

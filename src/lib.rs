@@ -1,21 +1,19 @@
 #![allow(unused)]
 use crate::cli::Cli;
+use crate::io::debug::print_binned_hists;
 use crate::io::{build_ri_hists, build_ri_hists_from_iter};
 use crate::lease_gen::{LeaseOperationContext, LeaseResults};
 use crate::utils::*;
 use regex::Regex;
 use std::error::Error;
-use crate::io::debug::print_binned_hists;
 
 pub mod cli;
-/// Small miscellaneous functions used
 mod helpers;
-/// Functions for parsing input files, debug prints, and lease output
 pub mod io;
-/// Core algorithms
 pub mod lease_gen;
-pub mod utils;
+pub mod shel_cshel;
 mod tests;
+pub mod utils;
 
 pub fn run_this(cli: Cli) -> f64 {
     let max_scopes = calculate_max_scopes(cli.mem_size, cli.llt_size);
@@ -27,7 +25,8 @@ pub fn run_this(cli: Cli) -> f64 {
     let search_string = cli.input.to_lowercase();
     let cap = re
         .captures(&search_string)
-        .ok_or("Failed to capture regex").unwrap();
+        .ok_or("Failed to capture regex")
+        .unwrap();
     let empirical_rate = cli.empirical_sample_rate.to_lowercase();
 
     let (ri_hists, samples_per_phase, misses_from_first_access, empirical_sample_rate) =
@@ -73,7 +72,8 @@ pub fn gen_lease_from_trace(cli: Cli, trace: &Vec<(u32, i32, u32)>) -> f64 {
     let search_string = cli.input.to_lowercase();
     let cap = re
         .captures(&search_string)
-        .ok_or("Failed to capture regex").unwrap();
+        .ok_or("Failed to capture regex")
+        .unwrap();
     let empirical_rate = cli.empirical_sample_rate.to_lowercase();
 
     let (ri_hists, samples_per_phase, misses_from_first_access, empirical_sample_rate) =
@@ -120,7 +120,7 @@ pub fn run_prl(cli: &Cli, context: &LeaseOperationContext, cap: &regex::Captures
         &binned_ri_distributions,
         &binned_freqs,
     )
-        .unwrap();
+    .unwrap();
     lease_results.prune_leases_to_fit_llt(context.ri_hists, cli.llt_size);
 
     // generate_output_files(
@@ -138,7 +138,7 @@ pub fn run_shel_cshel(cli: &Cli, context: &LeaseOperationContext, cap: &regex::C
     // print!("Run {}: ", &cap[1]);
     let output_file_name = format!("{}/{}_{}_{}", cli.output, &cap[2], &cap[1], "leases");
 
-    let mut lease_results = lease_gen::shel_cshel(false, cli, context).unwrap();
+    let mut lease_results = shel_cshel::shel_cshel(false, cli, context).unwrap();
     lease_results.prune_leases_to_fit_llt(context.ri_hists, cli.llt_size);
 
     // generate_output_files(
@@ -159,7 +159,7 @@ pub fn run_shel_cshel(cli: &Cli, context: &LeaseOperationContext, cap: &regex::C
 
 pub fn run_cshel(cli: &Cli, cap: &regex::Captures, context: &LeaseOperationContext) {
     println!("Running C-SHEL.");
-    let mut lease_results = crate::lease_gen::shel_cshel(true, cli, context).unwrap();
+    let mut lease_results = crate::shel_cshel::shel_cshel(true, cli, context).unwrap();
 
     lease_results.prune_leases_to_fit_llt(context.ri_hists, cli.llt_size);
 
@@ -174,12 +174,7 @@ pub fn run_cshel(cli: &Cli, cap: &regex::Captures, context: &LeaseOperationConte
     // ).unwrap();
 }
 
-
-pub fn get_misses(
-    lease_results: LeaseResults,
-    context: &LeaseOperationContext,
-    cli: &Cli,
-) -> f64 {
+pub fn get_misses(lease_results: LeaseResults, context: &LeaseOperationContext, cli: &Cli) -> f64 {
     let (length, misses) = io::dump_leases(
         lease_results,
         &cli.output,
@@ -187,7 +182,7 @@ pub fn get_misses(
         context.misses_from_first_access,
     );
 
-    let miss_rate:f64 = misses as f64 / length as f64;
+    let miss_rate: f64 = misses as f64 / length as f64;
     // println!("length: {}, [CARL (UnboundCache) misses: {}, misses ratio: {}]", length, misses, miss_rate);
 
     miss_rate
@@ -223,7 +218,6 @@ pub fn calculate_next_cache_size(cache_size: usize) -> usize {
         }
     }
 }
-
 
 pub fn generate_output_files_(
     lease_results: LeaseResults,
