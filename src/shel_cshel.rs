@@ -1,4 +1,7 @@
-use std::collections::{BinaryHeap, HashMap};
+use std::{
+    collections::{BinaryHeap, HashMap},
+    default,
+};
 
 use crate::{cli::*, lease_gen::*};
 
@@ -20,7 +23,7 @@ pub fn shel_cshel(cshel: bool, cli: &Cli, context: &LeaseOperationContext) -> Op
     let mut past_lease_values: HashMap<u64, (u64, u64)> = HashMap::new();
     let mut last_lease_cost: HashMap<u64, HashMap<u64, (u64, u64, u64)>> = HashMap::new();
 
-    let num_sets = context.set_mask as u64 + 1;
+    let num_sets = context.set_mask as u64 + 1; // default set_mask value: 0
     let phase_ids: Vec<&u64> = context.samples_per_phase.keys().collect();
 
     //since we can't run CSHEL without also running SHEL, don't output RI history twice
@@ -45,16 +48,6 @@ pub fn shel_cshel(cshel: bool, cli: &Cli, context: &LeaseOperationContext) -> Op
         }
     }
 
-    // get lease hits assuming a base lease of 0
-    // for _r in ppuc_tree.clone() {
-    //     let lease = ppuc_tree.pop().unwrap();
-    //     //sum hits for reference over all sets
-    //     *lease_hits
-    //         .entry(lease.ref_id)
-    //         .or_insert(HashMap::new())
-    //         .entry(lease.lease)
-    //         .or_insert(0) += lease.new_hits;
-    // }
     while let Some(lease) = ppuc_tree.pop() {
         // Process the `lease` here
         *lease_hits
@@ -66,16 +59,7 @@ pub fn shel_cshel(cshel: bool, cli: &Cli, context: &LeaseOperationContext) -> Op
 
     // reinitalize ppuc tree, assuming a base lease of 1
     for (&ref_id, ri_hist) in context.ri_hists.ri_hists.iter() {
-        let ppuc_vec = get_ppuc(ref_id, 1, ri_hist);
-        if let Some(&highest_ppuc) = ppuc_vec
-            .iter()
-            .max_by(|a, b| a.ppuc.partial_cmp(&b.ppuc).unwrap())
-        {
-            ppuc_tree.push(highest_ppuc);
-        }
-        // for ppuc in ppuc_vec.iter() {
-        //     ppuc_tree.push(*ppuc);
-        // }
+        push_highest_ppuc(&mut ppuc_tree, ref_id, 1, ri_hist);
     }
 
     //initialize cost + budget
@@ -156,9 +140,16 @@ pub fn shel_cshel(cshel: bool, cli: &Cli, context: &LeaseOperationContext) -> Op
         let ref_id = new_lease.ref_id & 0xFFFFFFFF;
 
         //continue to pop until we have a ppuc with the right base_lease
-        if new_lease.old_lease != *leases.get(&ref_id).unwrap() {
-            continue;
+        if let Some(&old_lease) = leases.get(&ref_id) {
+            if new_lease.old_lease != old_lease {
+                continue;
+            }
         }
+        // else {
+        //     // Handle the case where ref_id is not in leases
+        //     // For example, skip this iteration
+        //     continue;
+        // }
 
         let mut set_full = false;
         for set in 0..num_sets {
@@ -189,6 +180,9 @@ pub fn shel_cshel(cshel: bool, cli: &Cli, context: &LeaseOperationContext) -> Op
             continue;
         }
 
+        // default lease is the minimum lease value among all the reference in leases
+        let default_lease = leases.values().cloned().min().unwrap_or(0);
+
         let old_lease = *leases.get(&ref_id).unwrap();
         //check for capacity
         let mut acceptable_lease = true;
@@ -197,7 +191,7 @@ pub fn shel_cshel(cshel: bool, cli: &Cli, context: &LeaseOperationContext) -> Op
             //get cost of assigning a lease of 1 for each set
             for set in 0..num_sets {
                 let set_phase_id_ref = ref_id | (set << 32);
-                let new_cost = match cshel {
+                let additional_cost = match cshel {
                     true => cshel_phase_ref_cost(
                         context.sample_rate,
                         phase,
@@ -220,8 +214,8 @@ pub fn shel_cshel(cshel: bool, cli: &Cli, context: &LeaseOperationContext) -> Op
                     .entry(phase)
                     .or_default()
                     .entry(set)
-                    .or_insert(new_cost);
-                if (new_cost + current_cost.get(&set).unwrap())
+                    .or_insert(additional_cost);
+                if (additional_cost + current_cost.get(&set).unwrap())
                     > *budget_per_phase.get(&phase).unwrap()
                 {
                     acceptable_lease = false;
@@ -248,6 +242,7 @@ pub fn shel_cshel(cshel: bool, cli: &Cli, context: &LeaseOperationContext) -> Op
                 (
                     new_lease.lease,
                     *leases.get(&(&new_lease.ref_id & 0xFFFFFFFF)).unwrap(),
+                    // .unwrap_or(&default_lease),
                 ),
             );
 
@@ -267,21 +262,13 @@ pub fn shel_cshel(cshel: bool, cli: &Cli, context: &LeaseOperationContext) -> Op
             //update leases
             leases.insert(new_lease.ref_id & 0xFFFFFFFF, new_lease.lease);
             //push new ppucs
-            let ppuc_vec = get_ppuc(
-                new_lease.ref_id,
+            push_highest_ppuc(
+                &mut ppuc_tree,
+                ref_id,
                 new_lease.lease,
                 context.ri_hists.ri_hists.get(&new_lease.ref_id).unwrap(),
             );
 
-            if let Some(&highest_ppuc) = ppuc_vec
-                .iter()
-                .max_by(|a, b| a.ppuc.partial_cmp(&b.ppuc).unwrap())
-            {
-                ppuc_tree.push(highest_ppuc);
-            }
-            // for ppuc in ppuc_vec.iter() {
-            //     ppuc_tree.push(*ppuc);
-            // }
             if cli.verbose {
                 print!(
                     "Assigned lease {:x} to reference ({},{:x}). ",
@@ -291,6 +278,65 @@ pub fn shel_cshel(cshel: bool, cli: &Cli, context: &LeaseOperationContext) -> Op
                 );
             }
         } else {
+            // // println!("lease length: {}", leases.len());
+            // // if the leases.len() is greater than cli.llt_size, we need to evict the reference that has the lowest ppuc amount the references in leases
+            // let mut  pruned = false;
+            // while leases.len() >= cli.llt_size.try_into().unwrap() {
+            //     pruned = true;
+            //     if cli.verbose {
+            //         println!(
+            //             "Evicting reference {:x} with lease {}",
+            //             *leases.keys().min().unwrap(),
+            //             *leases.values().min().unwrap()
+            //         );
+            //     }
+
+            //     // Calculate the ppuc for each reference with a given base of lease value of 1 and remove the reference with the lowest ppuc
+            //     let mut uc_tree: Vec<(u64, f64)> = Vec::new();
+            //     for (ref_id, lease) in leases.iter_mut() {
+            //         let uc = marginal_utility_cost(
+            //             *lease,
+            //             default_lease,
+            //             context.ri_hists.ri_hists.get(ref_id).unwrap(),
+            //         );
+            //         uc_tree.push((*ref_id, uc));
+            //     }
+
+            //     // Remove the reference with the lowest ppuc
+            //     let min_ref = uc_tree
+            //         .iter()
+            //         .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+            //         .unwrap()
+            //         .0;
+            //     //update cache use
+            //     let mut loop_count = 0;
+            //     for (phase, phase_set_costs) in cost_per_phase.iter_mut() {
+            //         for (set, set_costs) in phase_set_costs.iter_mut() {
+            //             loop_count += 1;
+            //             print!("handling ref {:x} ", min_ref);
+            //             *set_costs -= calculate_cost(
+            //                 leases.get(&min_ref).unwrap(),
+            //                 default_lease,
+            //                 context.ri_hists.ri_hists.get(&(min_ref | (set << 32))).unwrap(),
+            //             );
+            //         }
+            //     }
+            //     println!("Processed {} loops", loop_count);
+            //     // lease_hits.remove(&min_ref);
+            //     leases.remove(&min_ref);
+            //     // Also remove the dual lease if it exists
+            //     dual_leases.remove(&min_ref);
+
+            //     push_highest_ppuc(
+            //         &mut ppuc_tree,
+            //         min_ref,
+            //         1,
+            //         context.ri_hists.ri_hists.get(&min_ref).unwrap(),
+            //     );
+            // }
+            // if pruned {
+            //     continue;
+            // }
             //unacceptable lease, must assign a dual lease
             let mut alpha = 1.0;
             let mut current_phase_alpha = 1.0;
@@ -300,17 +346,19 @@ pub fn shel_cshel(cshel: bool, cli: &Cli, context: &LeaseOperationContext) -> Op
                     let &set_phase_ref_cost =
                         new_phase_ref_cost.get(&phase).unwrap().get(&set).unwrap();
                     if set_phase_ref_cost > 0 {
-                        if set_budget < current_set_cost {
-                            println!(
-                                "
-                            ERROR: current cost exceeds budget
-                            *budget_per_phase.get(&phase)=.unwrap():  {}
-                            currenc_cost:                            {}
-                            ",
-                                set_budget, current_set_cost
-                            );
-                            panic!();
-                        }
+                        // TODO: Fix this
+                        // if set_budget < current_set_cost {
+                        //     println!(
+                        //         "
+                        //     ERROR: current cost exceeds budget
+                        //     *budget_per_phase.get(&phase)=.unwrap():  {}
+                        //     set:                                     {}
+                        //     current_set_cost:                        {}
+                        //     ",
+                        //         set_budget, set, current_set_cost
+                        //     );
+                        //     panic!();
+                        // }
 
                         let remaining_budget = set_budget - current_set_cost;
                         //get the best alpha for any set  (ignoring other phases) that we want for the current reference
@@ -550,21 +598,15 @@ pub fn shel_cshel(cshel: bool, cli: &Cli, context: &LeaseOperationContext) -> Op
             if alpha == 1.0 && !set_full {
                 //update leases
                 leases.insert(new_lease.ref_id & 0xFFFFFFFF, new_lease.lease);
+
                 //push new ppucs
-                let ppuc_vec = get_ppuc(
-                    new_lease.ref_id,
+                push_highest_ppuc(
+                    &mut ppuc_tree,
+                    ref_id,
                     new_lease.lease,
                     context.ri_hists.ri_hists.get(&new_lease.ref_id).unwrap(),
                 );
-                if let Some(&highest_ppuc) = ppuc_vec
-                    .iter()
-                    .max_by(|a, b| a.ppuc.partial_cmp(&b.ppuc).unwrap())
-                {
-                    ppuc_tree.push(highest_ppuc);
-                }
-                // for ppuc in ppuc_vec.iter() {
-                //     ppuc_tree.push(*ppuc);
-                // }
+
                 if cli.verbose {
                     println!(
                         "Assigned lease {:x} to reference ({},{:x}).",
@@ -573,9 +615,8 @@ pub fn shel_cshel(cshel: bool, cli: &Cli, context: &LeaseOperationContext) -> Op
                         new_lease.ref_id & 0x00FFFFFF
                     );
                 }
-            }
-            //add dual lease
-            else {
+            } else {
+                //add dual lease
                 //store cost of dual lease and store cost of lease with no dual lease and the reference for that lease
                 for set in 0..num_sets {
                     if last_lease_cost.get_mut(&phase).is_none() {
@@ -663,4 +704,77 @@ pub fn shel_cshel(cshel: bool, cli: &Cli, context: &LeaseOperationContext) -> Op
             );
         }
     }
+}
+
+fn push_highest_ppuc(
+    ppuc_tree: &mut BinaryHeap<PPUC>,
+    ref_id: u64,
+    base_lease: u64,
+    ri_hist: &HashMap<u64, (u64, HashMap<u64, (u64, u64)>)>,
+) {
+    let ppuc_vec = get_ppuc(ref_id, base_lease, ri_hist);
+    if let Some(&highest_ppuc) = ppuc_vec
+        .iter()
+        .max_by(|a, b| a.ppuc.partial_cmp(&b.ppuc).unwrap())
+    {
+        ppuc_tree.push(highest_ppuc);
+    }
+}
+
+fn marginal_utility_cost(
+    lease: u64,
+    base_lease: u64,
+    ri_hist: &HashMap<u64, (u64, HashMap<u64, (u64, u64)>)>,
+) -> f64 {
+    // If the base lease is zero, return 0 to avoid division by zero
+    if base_lease == 0 {
+        return 0.0;
+    }
+
+    let mut hits = 0;
+    let mut cost = 0;
+    let mut bhits = 0;
+    let mut bcost = 0;
+
+    // Iterate through the reuse interval histogram (RI histogram)
+    for (ri, (count, _)) in ri_hist.iter() {
+        if *ri <= lease {
+            hits += *count;
+            cost += *count * *ri;
+        } else {
+            cost += *count * lease;
+        }
+
+        if *ri <= base_lease {
+            bhits += *count;
+            bcost += *count * *ri;
+        } else {
+            bcost += *count * base_lease;
+        }
+    }
+
+    (hits - bhits) as f64 / (cost - bcost) as f64
+}
+
+fn calculate_cost(
+    lease: &u64,
+    base_lease: u64,
+    ri_hist: &HashMap<u64, (u64, HashMap<u64, (u64, u64)>)>,
+) -> u64 {
+    // Example logic: Replace this with the actual cost calculation logic
+    let mut cost = 0;
+    for (ri, (count, _)) in ri_hist.iter() {
+        if ri > &base_lease {
+            if *ri <= *lease {
+                cost += count * *ri;
+            } else {
+                cost += count * lease;
+            }
+        }
+    }
+    // println!(
+    //     "Calculating cost for lease: {}, base_lease: {}, cost: {}",
+    //     lease, base_lease, cost
+    // );
+    cost
 }

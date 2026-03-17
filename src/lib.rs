@@ -62,11 +62,11 @@ pub fn gen_lease_from_trace(cli: Cli, trace: &Vec<(u32, i32, u32)>) -> f64 {
     let set_mask = calculate_set_mask(cli.cache_size, num_ways);
     // print!("{} num_ways, {} blocks -- ", num_ways, cli.cache_size);
 
-    if num_ways == cli.cache_size {
-        print!("Fully {:>3} blocks: ", cli.cache_size);
-    } else {
-        panic!("Not fully associative cache not supported yet.");
-    }
+    // if num_ways == cli.cache_size {
+    //     print!("Fully {:>3} blocks: ", cli.cache_size);
+    // } else {
+    //     panic!("Not fully associative cache not supported yet.");
+    // }
 
     let re = Regex::new(r"/(clam|shel).*/(.*?)\.(txt|csv|zst)$").unwrap();
     let search_string = cli.input.to_lowercase();

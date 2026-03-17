@@ -35,9 +35,10 @@ pub struct Cli {
     pub verbose: bool,
 
     /// Number of elements in the lease lookup table
-    #[arg(short = 'L', long, default_value = "128")]
+    // #[arg(short = 'L', long, default_value = "128")]
+    #[arg(short = 'L', long, default_value = "4096")]
     pub llt_size: u64,
-
+    // TODO: expanding to 4096 for error removal
     /// Total memory allocated for lease information
     #[arg(short = 'M', long, default_value = "65536")]
     pub mem_size: u64,
@@ -64,12 +65,13 @@ impl Default for Cli {
         Cli {
             input: "tests/clam/gemm_small_trace.csv".to_string(),
             output: "tests/out".to_string(),
-            cache_size: 64,
+            cache_size: 128,
             set_associativity: 0,
             prl: 0,
             cshel: false,
             verbose: false,
-            llt_size: 128,
+            // llt_size: 128, // TODO: expanding to 4096 for error removal
+            llt_size: 4096,
             mem_size: 65536,
             discretize_width: 9,
             debug: false,

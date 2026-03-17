@@ -209,7 +209,8 @@ impl LeaseResults {
                         count += 1;
                     }
                     if !pruned_dual_leases.contains_key(reference_id) {
-                        pruned_dual_leases.insert(*reference_id, *self.dual_leases.get(reference_id).unwrap());
+                        pruned_dual_leases
+                            .insert(*reference_id, *self.dual_leases.get(reference_id).unwrap());
                     }
                 } else {
                     // Only skip lease_value == 1 if llt_size < importance_vec.len()

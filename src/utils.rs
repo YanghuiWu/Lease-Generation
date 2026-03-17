@@ -23,3 +23,12 @@ pub fn calculate_set_mask(cache_size: u64, num_ways: u64) -> u32 {
     }
     (sets - 1) as u32
 }
+
+// Show me some example result for the calculate_set_mask function for fully associative cache
+// Example: calculate_set_mask(1024, 1)
+// return 1023
+
+//  How to use this mask
+//  suppose cache address is 0xffffffff
+//  then the set is 0xffffffff & calculate_set_mask(1024, 1)
+//  then it will be 0x3ff

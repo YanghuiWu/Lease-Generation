@@ -1,10 +1,11 @@
-use clam::cli::Cli;
-use clam::run_this;
+use lease_generation::{cli::Cli, run_this};
 
 fn grinding() {
-    let trace_path = "./tests/clam/block_trace.bin.zst";
+    // let trace_path = "./tests/clam/block_trace.bin.zst";
+    let trace_path = "../data/clam/pluto/medium/results/cholesky/block_trace.bin.zst";
     // let trace_path = "./tests/results/2mm/block_trace.bin.zst";
     let clam_out_dir = "./tests/out";
+    std::fs::create_dir_all(&clam_out_dir).unwrap();
     let miss_curve = format!("{}/clam_misses", clam_out_dir);
     let _output_plot = format!("{}/.png", miss_curve);
 
@@ -13,10 +14,10 @@ fn grinding() {
     // println!("writing to file");
 
     let mut cli = Cli::default();
-    cli.cache_size = 6;
+    cli.cache_size = 128;
     let cache_size: usize = cli.cache_size as usize;
     while cache_size <= 128 {
-        // print!("\n{}, ", cache_size);
+        print!("\n{}, ", cache_size);
 
         cli.input = trace_path.to_string();
         cli.output = clam_out_dir.to_string();
@@ -33,12 +34,6 @@ fn grinding() {
     }
 
     wtr.flush().expect("TODO: panic message");
-
-    // Call the Python script to generate the plot
-    // Command::new("../locality_dir/constructive_opt/venv/bin/python")
-    //     .arg("src/plot_opt_miss_ratio.py") c
-    //     .arg(miss_curve.clone())
-    //     .arg(miss_curve).status().unwrap();
 }
 
 fn main() {
