@@ -35,7 +35,7 @@ pub struct Cli {
     pub verbose: bool,
 
     /// Number of elements in the lease lookup table
-    #[arg(short = 'L', long, default_value = "128")]
+    #[arg(short = 'L', long, default_value = "4096")]
     pub llt_size: u64,
 
     /// Total memory allocated for lease information
@@ -69,7 +69,7 @@ impl Default for Cli {
             prl: 0,
             cshel: false,
             verbose: false,
-            llt_size: 128,
+            llt_size: 4096,
             mem_size: 65536,
             discretize_width: 9,
             debug: false,

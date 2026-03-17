@@ -1,39 +1,36 @@
 use crate::cli::Cli;
 use crate::lease_gen::{LeaseResults, RIHists, process_sample_cost};
+use core::time;
 use csv::ReaderBuilder;
 use serde::Deserialize;
 use std::collections::BinaryHeap;
 use std::collections::HashMap;
 use std::convert::TryInto;
 use std::fs::File;
-use std::io::Write;
+use std::io::{BufReader, Read, Seek, SeekFrom, Write};
+use zstd::stream::read::Decoder;
 
-#[derive(Deserialize, Debug)]
+#[derive(Debug)]
 pub struct Sample {
-    phase_id_ref: String,
-    // #[serde(rename = "forward_ri")]
-    #[serde(alias = "forward_ri", alias = "backward_ri")]
-    backward_ri: String,
-    tag: String,
-    time: u64,
-}
-
-#[derive(Clone)]
-pub struct Sample2 {
     pub phase_id_ref: u32,
-    pub forward_ri: i32,
+    pub ri: u32,
     pub tag: u32,
-    pub is_last: bool,
+    pub time: u64,
 }
 
 // Function to parse a sample from CSV and extract relevant fields
 fn parse_sample(sample: &Sample, set_mask: u32) -> (u64, u64, u64, u64) {
-    let tag = u32::from_str_radix(&sample.tag, 16).expect("Invalid tag format");
+    // let tag = u32::from_str_radix(&sample.tag, 16).expect("Invalid tag format");
+    // let phase_id_ref = u64::from_str_radix(&sample.phase_id_ref, 16).expect("Invalid phase_id_ref");
+    // let ri = u64::from_str_radix(&sample.backward_ri, 16).expect("Invalid backward_ri");
+
+    let tag = sample.tag;
+    let phase_id_ref = u64::from(sample.phase_id_ref) | ((tag & set_mask) as u64) << 32;
+    let ri = u64::from(sample.ri);
+
     let set = (tag & set_mask) as u64;
-    let phase_id_ref = u64::from_str_radix(&sample.phase_id_ref, 16).expect("Invalid phase_id_ref");
     let set_phase_id_ref = phase_id_ref | (set << 32);
-    let ri = u64::from_str_radix(&sample.backward_ri, 16).expect("Invalid backward_ri");
-    // println!("1set_phase_id_ref: {:x}, phase_id_ref: {:x}, tag: {:x}, set << 24: {}", 
+    // println!("1set_phase_id_ref: {:x}, phase_id_ref: {:x}, tag: {:x}, set << 24: {}",
     //         set_phase_id_ref, phase_id_ref, tag, set << 32);
     (set_phase_id_ref, ri, phase_id_ref, set)
 }
@@ -63,10 +60,15 @@ pub fn build_ri_hists(
     set_mask: u32,
 ) -> (RIHists, HashMap<u64, u64>, usize, u64) {
     let (phase_transitions, first_misses, sampling_rate) = build_phase_transitions(input_file);
-    let mut rdr = ReaderBuilder::new()
-        .has_headers(true)
-        .from_path(input_file)
-        .expect("Failed to open input file");
+    // let mut rdr = ReaderBuilder::new()
+    //     .has_headers(true)
+    //     .from_path(input_file)
+    //     .expect("Failed to open input file");
+
+    let file = File::open(input_file).unwrap();
+    let decoder = Decoder::new(BufReader::new(file)).unwrap();
+    let mut reader = BufReader::new(decoder);
+    let mut buffer = [0u8; 12];
 
     let mut ri_hists = HashMap::new();
     let mut samples_per_phase = HashMap::new();
@@ -129,21 +131,51 @@ pub fn build_ri_hists(
     if cshel {
         println!("Processing C-SHEL data");
         for is_head in &[true, false] {
-            rdr = ReaderBuilder::new()
-                .has_headers(true)
-                .from_path(input_file)
-                .expect("Failed to open input file");
-            for result in rdr.deserialize() {
-                let sample: Sample = result.expect("Failed to deserialize sample");
-                process_sample(sample, *is_head);
+            let mut row_num = 1;
+            while let Ok(()) = reader.read_exact(&mut buffer) {
+                let phase_id_ref = u32::from_le_bytes(buffer[0..4].try_into().unwrap());
+                let ri = u32::from_le_bytes(buffer[4..8].try_into().unwrap());
+                let tag = u32::from_le_bytes(buffer[8..12].try_into().unwrap());
+                // let time         = u64::from_le_bytes(buffer[12..20].try_into().unwrap());
+                let time = row_num as u64; // Use row number as time for C-SHEL
+
+                process_sample(
+                    Sample {
+                        phase_id_ref,
+                        ri,
+                        tag,
+                        time,
+                    },
+                    *is_head,
+                );
+                row_num += 1;
             }
         }
     } else {
-        // println!("Processing SHEL data");
-        for result in rdr.deserialize() {
-            let sample: Sample = result.expect("Failed to deserialize sample");
-            process_sample(sample, false);
+        let mut row_num = 1;
+        while let Ok(()) = reader.read_exact(&mut buffer) {
+            let phase_id_ref = u32::from_le_bytes(buffer[0..4].try_into().unwrap());
+            let ri = u32::from_le_bytes(buffer[4..8].try_into().unwrap());
+            let tag = u32::from_le_bytes(buffer[8..12].try_into().unwrap());
+            // let time         = u64::from_le_bytes(buffer[12..20].try_into().unwrap());
+            let time = row_num as u64; // Use row number as time for SHEL
+
+            process_sample(
+                Sample {
+                    phase_id_ref,
+                    ri,
+                    tag,
+                    time,
+                },
+                false,
+            );
+            row_num += 1;
         }
+        // println!("Processing SHEL data");
+        // for result in rdr.deserialize() {
+        //     let sample: Sample = result.expect("Failed to deserialize sample");
+        //     process_sample(sample, false);
+        // }
     }
 
     // println!("\nRI Hists: {:?}", ri_hists);
@@ -154,7 +186,7 @@ pub fn build_ri_hists(
     //     println!(
     //         "Set Phase ID Ref: {:x}, RIs: {:?}",
     //         set_phase_id_ref, sorted_ri
-    //     );       
+    //     );
     // }
     (
         RIHists::new(ri_hists),
@@ -165,86 +197,66 @@ pub fn build_ri_hists(
 }
 
 pub fn build_ri_hists_from_iter(
-    trace: &Vec<(u32, i32, u32, bool)>,
-    // trace: &Vec<Sample2>,
+    trace: &Vec<(u32, i32, u32)>,
     cshel: bool,
     set_mask: u32,
 ) -> (RIHists, HashMap<u64, u64>, usize, u64) {
-    // Collect into a Vec so we can iterate multiple times
-    // let samples: Vec<Sample2> = trace
-    //     .iter()
-    //     .enumerate()
-    //     .map(|(time_counter, (phase_id_ref, forward_ri, tag, _))| {
-    //         Sample2 {
-    //             phase_id_ref: *phase_id_ref,
-    //             forward_ri: *forward_ri,
-    //             tag: *tag,
-    //             time: time_counter as u32 + 1, // Adjusting to start from 1
-    //         }
-    //     })
-    //     .collect();
-
-    // Compute phase transitions
-    let (phase_transitions, first_misses, sampling_rate) =
-        build_phase_transitions_from_iter(trace);
-
     // ... now do the same logic as before, using samples.iter() for the main loop ...
     let mut ri_hists = HashMap::new();
     let mut samples_per_phase: HashMap<u64, u64> = HashMap::new();
 
     // For C-SHEL we need to process twice (heads and tails)
-    let mut process_sample = |sample: &(u32, i32, u32, bool), is_head: bool, idx: usize| {
-        let (phase_id_ref, forward_ri, tag, is_last) = *sample;
+    let mut process_sample = |sample: &(u32, i32, u32), is_head: bool, idx: usize| {
+        let (phase_id_ref, forward_ri, tag) = *sample;
         let set = (tag & set_mask) as u32;
         let set_phase_id_ref = phase_id_ref | (set << 24);
-        // println!("set_phase_id_ref: {:x}, phase_id_ref: {:x}, tag: {:x}, set << 24: {}", 
+        // println!("set_phase_id_ref: {:x}, phase_id_ref: {:x}, tag: {:x}, set << 24: {}",
         //     set_phase_id_ref, phase_id_ref, tag, set << 24);
         // let set_phase_id_ref = sample.time & set_mask as u32;
         let ri = forward_ri;
-        let reuse_time = (idx + 1) as u32; // Use index+1 as time
 
         let mut ri_signed = ri;
-        let use_time = if ri_signed < 0 {
-            reuse_time - ri_signed.unsigned_abs()
-        } else if ri_signed == i32::MAX {
-            0
-        } else {
-            reuse_time + ri_signed as u32
-        };
 
-        if ri_signed < 0 {
-            ri_signed = 0xFFFFFF; // Canonical value for negatives (as in your old code)
-        }
-
-        // Binary search for phase transition (stub below: replace with your real function)
-        // let next_phase_tuple = phase_transitions
-        //     .iter()
-        //     .find(|&&(t, _)| t > use_time)
-        //     .cloned()
-        //     .unwrap_or((reuse_time + 1, 0));
-
-        let next_phase_tuple = crate::helpers::binary_search(&phase_transitions, use_time as u64)
-            .unwrap_or((reuse_time as u64 + 1, 0));
-
-        // let phase_id = (phase_id_ref & 0xFF000000) >> 24;
+        let phase_id = (phase_id_ref & 0xFF000000) >> 24;
 
         if cshel {
+            // Compute phase transitions
+            let phase_transitions = build_phase_transitions_from_iter(trace);
+            let reuse_time = (idx + 1) as u32; // Use index+1 as time
+
+            let use_time = if ri < 0 {
+                reuse_time - ri.unsigned_abs()
+            } else if ri == i32::MAX {
+                0
+            } else {
+                reuse_time + ri as u32
+            };
+
+            // Binary search for phase transition (stub below: replace with your real function)
+            // let next_phase_tuple = phase_transitions
+            //     .iter()
+            //     .find(|&&(t, _)| t > use_time)
+            //     .cloned()
+            //     .unwrap_or((reuse_time + 1, 0));
+
+            let next_phase_tuple =
+                crate::helpers::binary_search(&phase_transitions, use_time as u64)
+                    .unwrap_or((reuse_time as u64 + 1, 0));
+
             process_sample_cost(
                 &mut ri_hists,
                 set_phase_id_ref as u64,
                 ri_signed as u64,
                 use_time as u64,
-                (next_phase_tuple.0 as u64, next_phase_tuple.1 as u64),
+                next_phase_tuple,
                 is_head,
             );
             if is_head {
-                let phase_id = (phase_id_ref & 0xFF000000) >> 24;
                 *samples_per_phase
                     .entry(phase_id as u64)
                     .or_insert_with(|| 0) += 1;
             }
         } else {
-            let phase_id = (phase_id_ref & 0xFF000000) >> 24;
             *samples_per_phase.entry(phase_id as u64).or_insert(0) += 1;
             ri_hists
                 .entry(set_phase_id_ref.into())
@@ -257,20 +269,25 @@ pub fn build_ri_hists_from_iter(
                 .or_insert((0, 0));
         }
     };
-
+    let mut u_tags = std::collections::HashSet::new();
     if cshel {
         // C-SHEL: process as heads and tails
         for is_head in [true, false] {
             for (idx, sample) in trace.iter().enumerate() {
                 process_sample(sample, is_head, idx);
+                u_tags.insert(sample.2); // store unique tags
             }
         }
     } else {
         // SHEL: process once
         for (idx, sample) in trace.iter().enumerate() {
             process_sample(sample, false, idx);
+            u_tags.insert(sample.2); // store unique tags
         }
     }
+
+    let sampling_rate = 1;
+    let first_misses = u_tags.len();
 
     // println!("motheorei");
     // // print the hist sorted by set_phase_id_ref and ri
@@ -280,7 +297,7 @@ pub fn build_ri_hists_from_iter(
     //     println!(
     //         "Set Phase ID Ref: {:x}, RIs: {:?}",
     //         set_phase_id_ref, sorted_ri
-    //     );       
+    //     );
     // }
     // println!("\nRI Hists: {:?}", ri_hists);
 
@@ -305,16 +322,44 @@ pub fn get_prl_hists(
     // bin_ri_distributions.insert(0, curr_ri_distribution_dict.clone());
 
     // First pass to find the last address
-    {
-        let mut rdr = ReaderBuilder::new()
-            .has_headers(true)
-            .from_path(input_file)
-            .expect("Failed to open input file");
 
-        for result in rdr.deserialize() {
-            let sample: Sample = result.expect("Failed to deserialize sample");
-            last_address = sample.time;
+    {
+        // let mut rdr = ReaderBuilder::new()
+        //     .has_headers(true)
+        //     .from_path(input_file)
+        //     .expect("Failed to open input file");
+
+        // for result in rdr.deserialize() {
+        //     let sample: Sample = result.expect("Failed to deserialize sample");
+        //     last_address = sample.time;
+        // }
+
+        // Read the last 8 bytes from the decompressed stream for last_address
+        let file = File::open(input_file).unwrap();
+        let decoder = Decoder::new(BufReader::new(file)).unwrap();
+        let mut reader = BufReader::new(decoder);
+
+        let mut last8 = [0u8; 8];
+        let mut buf = [0u8; 4096];
+        let mut total_read = 0;
+        loop {
+            let n = reader.read(&mut buf).unwrap();
+            if n == 0 {
+                break;
+            }
+            total_read += n;
+            // Shift in new bytes to last8 buffer
+            if n >= 8 {
+                last8.copy_from_slice(&buf[n - 8..n]);
+            } else {
+                // For small reads, shift and fill
+                let mut temp = last8.to_vec();
+                temp.extend_from_slice(&buf[..n]);
+                let len = temp.len();
+                last8.copy_from_slice(&temp[len - 8..]);
+            }
         }
+        last_address = u64::from_le_bytes(last8);
     }
 
     let bin_width = ((last_address as f64) / (num_bins as f64)).ceil() as u64;
@@ -326,13 +371,33 @@ pub fn get_prl_hists(
     let mut curr_bin_dict = HashMap::<u64, u64>::new();
     let mut curr_ri_distribution_dict = HashMap::<u64, HashMap<u64, u64>>::new();
 
-    let mut rdr = ReaderBuilder::new()
-        .has_headers(true)
-        .from_path(input_file)
-        .expect("Failed to open input file");
+    // let mut rdr = ReaderBuilder::new()
+    //     .has_headers(true)
+    //     .from_path(input_file)
+    //     .expect("Failed to open input file");
 
-    for result in rdr.deserialize() {
-        let sample: Sample = result.unwrap();
+    // for result in rdr.deserialize() {
+    //     let sample: Sample = result.unwrap();
+    let file = File::open(input_file).unwrap();
+    let decoder = Decoder::new(BufReader::new(file)).unwrap();
+    let mut reader = BufReader::new(decoder);
+
+    let mut buffer = [0u8; 12]; // Adjusted to read 16 bytes for Sample
+    let mut row_num = 1; // Initialize row number for time
+    while let Ok(()) = reader.read_exact(&mut buffer) {
+        let phase_id_ref = u32::from_le_bytes(buffer[0..4].try_into().unwrap());
+        let ri = u32::from_le_bytes(buffer[4..8].try_into().unwrap());
+        let tag = u32::from_le_bytes(buffer[8..12].try_into().unwrap());
+        // let time         = u32::from_le_bytes(buffer[12..20].try_into().unwrap());
+        let time = row_num as u64; // Use row number as time for C-SHEL
+
+        let sample = Sample {
+            phase_id_ref,
+            ri,
+            tag,
+            time,
+        };
+        row_num += 1; // Increment row number for next sample
 
         //if outside of current bin, moved to the next
         // TODO: Change to while?
@@ -389,33 +454,68 @@ pub fn get_prl_hists(
     )
 }
 
-pub fn build_phase_transitions_from_iter(trace: &Vec<(u32, i32, u32, bool)>) -> (Vec<(u64, u64)>, usize, u64) {
-    let mut u_tags = std::collections::HashMap::<u32, bool>::new();
+/// Builds a vector of phase transitions from a trace.
+///
+/// This function analyzes a trace of memory accesses, where each entry is a tuple of
+/// `(phase_id_ref, forward_ri, tag)`. It computes the time of the next use for each sample,
+/// tracks unique tags (for first misses), and determines when the phase changes occur.
+/// The result is a vector of `(time, phase_id)` pairs indicating the time at which each phase transition happens,
+/// the number of unique tags (first misses), and the empirical sampling rate.
+///
+/// # Arguments
+/// * `trace` - A reference to a vector of tuples representing the trace. Each tuple contains:
+///     - `phase_id_ref`: Reference to the phase ID.
+///     - `forward_ri`: Forward reuse interval.
+///     - `tag`: Unique identifier for the memory access.
+///
+/// # Returns
+/// A tuple containing:
+/// * `Vec<(u64, u64)>` - Vector of phase transitions as (time, phase_id).
+/// * `usize` - Number of first misses (unique tags).
+/// * `u64` - Empirical sampling rate.
+///
+/// # Example
+/// ```
+/// let trace = vec![(0x01000000, 5, 42), (0x02000000, 3, 43)];
+/// let (transitions, first_misses, sampling_rate) = build_phase_transitions_from_iter(&trace);
+/// ```
+pub fn build_phase_transitions_from_iter(trace: &Vec<(u32, i32, u32)>) -> (Vec<(u64, u64)>) {
+    // let mut u_tags = std::collections::HashMap::<u32, bool>::new();
     let mut sample_hash = std::collections::HashMap::new();
     let mut last_sample_time = 0;
-    let mut sample_num: u64 = 0;
+    // let mut sample_num: u64 = 0;
 
+    // for (idx, sample) in trace.iter().enumerate() {
+    //     let (phase_id_ref, forward_ri, tag) = *sample;
+    //     // store unique tags
+    //     u_tags.insert(tag, false);
+    //     let phase_id = (phase_id_ref & 0xFF000000) >> 24;
+    //     // let reuse_time = sample.time;
+    //     let current_time = (idx + 1) as u32; // Use index + 1 as time
+    //     let next_use = if (forward_ri as i32) < 0 {
+    //         current_time - (forward_ri).unsigned_abs()
+    //     } else if forward_ri == i32::MAX {
+    //         0
+    //     } else {
+    //         current_time + forward_ri as u32
+    //     };
+    //     sample_hash.insert(next_use, phase_id);
+    //     last_sample_time = current_time;
+    //     sample_num += 1;
+    // }
     for (idx, sample) in trace.iter().enumerate() {
-        let (phase_id_ref, forward_ri, tag, is_last) = *sample;
+        let (phase_id_ref, forward_ri, tag) = *sample;
         // store unique tags
-        u_tags.insert(tag, false);
+        // u_tags.insert(tag, false);
         let phase_id = (phase_id_ref & 0xFF000000) >> 24;
-        // let reuse_time = sample.time;
-        let reuse_time = (idx + 1) as u32; // Use index + 1 as time
-        let use_time = if (forward_ri as i32) < 0 {
-            reuse_time - (forward_ri).unsigned_abs()
-        } else if forward_ri == i32::MAX {
-            0
-        } else {
-            reuse_time - forward_ri as u32
-        };
-        sample_hash.insert(use_time, phase_id);
-        last_sample_time = reuse_time;
-        sample_num += 1;
+        let current_time = (idx + 1) as u32; // Use index + 1 as time
+        sample_hash.insert(current_time, phase_id);
+        // last_sample_time = current_time;
+        // sample_num += 1;
     }
 
-    let sampling_rate = (last_sample_time as f64 / sample_num as f64).round() as u64;
-    let first_misses = u_tags.len();
+    // let sampling_rate = (last_sample_time as f64 / sample_num as f64).round() as u64;
+    // let first_misses = u_tags.len();
 
     let mut sorted_samples: Vec<_> = sample_hash.iter().collect();
     sorted_samples.sort_by_key(|a| a.0);
@@ -430,7 +530,7 @@ pub fn build_phase_transitions_from_iter(trace: &Vec<(u32, i32, u32, bool)>) -> 
         }
     }
 
-    (phase_transitions, first_misses, sampling_rate)
+    phase_transitions
 }
 
 pub fn build_phase_transitions(input_file: &str) -> (Vec<(u64, u64)>, usize, u64) {
@@ -442,19 +542,46 @@ pub fn build_phase_transitions(input_file: &str) -> (Vec<(u64, u64)>, usize, u64
     let mut sample_hash = HashMap::new();
     let mut last_sample_time: u64 = 0;
     let mut sample_num: u64 = 0;
-    for result in rdr.deserialize() {
-        let sample: Sample = result.unwrap();
-        let ri = u64::from_str_radix(&sample.backward_ri, 16).unwrap();
+
+    let file = File::open(input_file).unwrap();
+    let decoder = Decoder::new(BufReader::new(file)).unwrap();
+    let mut reader = BufReader::new(decoder);
+
+    let mut buffer = [0u8; 12]; // Adjusted to read 12 bytes for Sample
+
+    let mut row_num = 1; // Initialize row number for time
+    while let Ok(()) = reader.read_exact(&mut buffer) {
+        let phase_id_ref = u32::from_le_bytes(buffer[0..4].try_into().unwrap());
+        let ri = u32::from_le_bytes(buffer[4..8].try_into().unwrap());
+        let tag = u32::from_le_bytes(buffer[8..12].try_into().unwrap());
+        // let time         = u32::from_le_bytes(buffer[12..20].try_into().unwrap());
+        let time = row_num as u64; // Use row number as time for SHEL
+
+        let sample = Sample {
+            phase_id_ref,
+            ri,
+            tag,
+            time,
+        };
+        row_num += 1; // Increment row number for next sample
+
+        let tag = sample.tag;
+        let phase_id_ref = sample.phase_id_ref as u64;
+        let ri = u64::from(sample.ri);
+        u_tags.insert(u64::from(tag), false);
+        // for result in rdr.deserialize() {
+        // let sample: Sample = result.unwrap();
+        // let ri = u64::from_str_radix(&sample.backward_ri, 16).unwrap();
         //don't use end of benchmark infinite RIs
 
         //store unique tags
-        u_tags.insert(u64::from_str_radix(&sample.tag, 16).unwrap(), false);
-        let phase_id_ref = u64::from_str_radix(&sample.phase_id_ref, 16).unwrap();
+        // u_tags.insert(u64::from_str_radix(&sample.tag, 16).unwrap(), false);
+        // let phase_id_ref = u64::from_str_radix(&sample.phase_id_ref, 16).unwrap();
         let phase_id = (phase_id_ref & 0xFF000000) >> 24;
         let reuse_time = sample.time;
         // println!("phase_id_ref: {}, phase_id: {}, reuse_time: {}", phase_id_ref, phase_id, reuse_time);
         let use_time = if (ri as i32) < 0 {
-            reuse_time - (ri as i32).unsigned_abs() as u64
+            reuse_time + (ri as i32).unsigned_abs() as u64
         } else {
             // if ri > i16::MAX as u64 {
             //     0
@@ -467,7 +594,7 @@ pub fn build_phase_transitions(input_file: &str) -> (Vec<(u64, u64)>, usize, u64
                 //     0 // If reuse time is less than RI, set to 0
                 // } else {
                 // }
-                reuse_time - ri
+                reuse_time + ri
             }
         };
         sample_hash.insert(use_time, phase_id);

@@ -21,3 +21,4 @@ Cargo.lock
 /tests
 /.idea
 .DS_Store
+.vscode

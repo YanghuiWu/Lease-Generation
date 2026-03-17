@@ -47,3 +47,7 @@ to use default
 
 export RUSTFLAGS="-Awarnings"
 unset RUSTFLAGS
+
+
+
+cargo run -- tests/clam/block_trace.bin.zst tests/out -s 64

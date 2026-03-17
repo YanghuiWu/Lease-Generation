@@ -491,7 +491,7 @@ pub fn prl(
                     dual_leases,
                     lease_hits,
                     trace_length,
-                })
+                });
             }
         };
 
@@ -869,14 +869,11 @@ pub fn shel_cshel(cshel: bool, cli: &Cli, context: &LeaseOperationContext) -> Op
         println!("costs per phase{:?}", cost_per_phase);
     }
 
-
-
     // print ppuc tree
     // println!("PPUC haha tree:");
     // for ppuc in ppuc_tree.clone() {
     //     println!("{:?}", ppuc);
     // }
-
 
     loop {
         new_lease = match ppuc_tree.pop() {
@@ -888,7 +885,7 @@ pub fn shel_cshel(cshel: bool, cli: &Cli, context: &LeaseOperationContext) -> Op
                     dual_leases,
                     lease_hits,
                     trace_length,
-                })
+                });
             }
         };
         let phase = (new_lease.ref_id & 0xFFFFFFFF) >> 24;
@@ -1063,7 +1060,7 @@ pub fn shel_cshel(cshel: bool, cli: &Cli, context: &LeaseOperationContext) -> Op
             //if the alpha we wish to assign would result in
             //a long lease that is never used because the short lease
             //probabiliy will be 1 after descretizing, don't assign dual lease.
-            
+
             // if current_phase_alpha < min_alpha {
             //     println!("Assigning lease {:x} with percentage {} to reference ({},{:x}) would not be meaningful.",
             //              new_lease.lease, current_phase_alpha, (new_lease.ref_id & 0xFF000000) >> 24,

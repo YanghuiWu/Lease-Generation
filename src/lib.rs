@@ -1,6 +1,6 @@
 #![allow(unused)]
 use crate::cli::Cli;
-use crate::io::{build_ri_hists, build_ri_hists_from_iter, Sample2};
+use crate::io::{build_ri_hists, build_ri_hists_from_iter};
 use crate::lease_gen::{LeaseOperationContext, LeaseResults};
 use crate::utils::*;
 use regex::Regex;
@@ -23,7 +23,7 @@ pub fn run_this(cli: Cli) -> f64 {
     let set_mask = calculate_set_mask(cli.cache_size, num_ways);
     print!("{} num_ways, {} blocks -- ", num_ways, cli.cache_size);
 
-    let re = Regex::new(r"/(clam|shel).*/(.*?)\.(txt|csv)$").unwrap();
+    let re = Regex::new(r"/(clam|shel).*/(.*?)\.(txt|csv|zst)$").unwrap();
     let search_string = cli.input.to_lowercase();
     let cap = re
         .captures(&search_string)
@@ -57,13 +57,19 @@ pub fn run_this(cli: Cli) -> f64 {
     run_shel_cshel(&cli, &context, &cap)
 }
 
-pub fn run_this_trace(cli: Cli, trace: &Vec<(u32, i32, u32, bool)>) -> f64 {
+pub fn gen_lease_from_trace(cli: Cli, trace: &Vec<(u32, i32, u32)>) -> f64 {
     let max_scopes = calculate_max_scopes(cli.mem_size, cli.llt_size);
     let num_ways = calculate_num_ways(cli.set_associativity, cli.cache_size);
     let set_mask = calculate_set_mask(cli.cache_size, num_ways);
-    print!("{} num_ways, {} blocks -- ", num_ways, cli.cache_size);
+    // print!("{} num_ways, {} blocks -- ", num_ways, cli.cache_size);
 
-    let re = Regex::new(r"/(clam|shel).*/(.*?)\.(txt|csv)$").unwrap();
+    if num_ways == cli.cache_size {
+        print!("Fully {:>3} blocks: ", cli.cache_size);
+    } else {
+        panic!("Not fully associative cache not supported yet.");
+    }
+
+    let re = Regex::new(r"/(clam|shel).*/(.*?)\.(txt|csv|zst)$").unwrap();
     let search_string = cli.input.to_lowercase();
     let cap = re
         .captures(&search_string)
@@ -129,7 +135,7 @@ pub fn run_prl(cli: &Cli, context: &LeaseOperationContext, cap: &regex::Captures
 }
 
 pub fn run_shel_cshel(cli: &Cli, context: &LeaseOperationContext, cap: &regex::Captures) -> f64 {
-    print!("Run {}: ", &cap[1]);
+    // print!("Run {}: ", &cap[1]);
     let output_file_name = format!("{}/{}_{}_{}", cli.output, &cap[2], &cap[1], "leases");
 
     let mut lease_results = lease_gen::shel_cshel(false, cli, context).unwrap();

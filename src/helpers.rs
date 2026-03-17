@@ -7,35 +7,22 @@ pub fn float_min(a: f64, b: f64) -> f64 {
 }
 
 pub fn binary_search(vector: &[(u64, u64)], value: u64) -> Option<(u64, u64)> {
-    let mut min = 0;
-    let mut max = vector.len() - 1;
-
-    while max >= min {
-        let guess = (max + min) / 2;
-        if vector[guess].0 == value {
-            //on transition sample
-            if guess < vector.len() - 1 {
-                return Some(vector[guess + 1]);
-            }
-            //transition of last phase
-            return None;
-        }
-
-        if vector[guess].0 < value {
-            min = guess + 1;
-        }
-        if vector[guess].0 > value {
-            if guess > 0 {
-                max = guess - 1;
+    match vector.binary_search_by(|x| x.0.cmp(&value)) {
+        Ok(idx) => {
+            // Found exact match, return next if exists
+            if idx + 1 < vector.len() {
+                Some(vector[idx + 1])
             } else {
-                return Some(vector[guess]);
+                None
+            }
+        }
+        Err(idx) => {
+            // Not found, idx is the insertion point for value
+            if idx < vector.len() {
+                Some(vector[idx])
+            } else {
+                None
             }
         }
     }
-    assert_eq!(max, min - 1);
-    if min == vector.len() {
-        return None;
-    }
-
-    Some(vector[min])
 }

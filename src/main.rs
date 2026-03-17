@@ -1,11 +1,12 @@
 use clam::cli::Cli;
-use clam::{calculate_next_cache_size, run_this};
+use clam::run_this;
 
 fn grinding() {
-    let trace_path = "./tests/clam/block_trace.csv";
+    let trace_path = "./tests/clam/block_trace.bin.zst";
+    // let trace_path = "./tests/results/2mm/block_trace.bin.zst";
     let clam_out_dir = "./tests/out";
     let miss_curve = format!("{}/clam_misses", clam_out_dir);
-    let output_plot = format!("{}/.png", miss_curve);
+    let _output_plot = format!("{}/.png", miss_curve);
 
     let mut wtr = csv::Writer::from_path(miss_curve.clone()).unwrap();
     wtr.write_record(["cache_size", "miss_ratio"]).unwrap();
@@ -13,29 +14,29 @@ fn grinding() {
 
     let mut cli = Cli::default();
     cli.cache_size = 6;
-    let mut cache_size: usize = cli.cache_size as usize;
+    let cache_size: usize = cli.cache_size as usize;
     while cache_size <= 128 {
         // print!("\n{}, ", cache_size);
 
         cli.input = trace_path.to_string();
         cli.output = clam_out_dir.to_string();
         cli.cache_size = cache_size as u64;
-        cli.verbose = true;
+        cli.verbose = false;
         let miss = run_this(cli);
         wtr.write_record(&[cache_size.to_string(), miss.to_string()])
             .unwrap();
 
+        // cache_size *= 2;
         break;
-
-        cache_size = calculate_next_cache_size(cache_size);
-        println!();
+        // cache_size = clam::calculate_next_cache_size(cache_size);
+        // println!();
     }
 
     wtr.flush().expect("TODO: panic message");
 
     // Call the Python script to generate the plot
     // Command::new("../locality_dir/constructive_opt/venv/bin/python")
-    //     .arg("src/plot_opt_miss_ratio.py")
+    //     .arg("src/plot_opt_miss_ratio.py") c
     //     .arg(miss_curve.clone())
     //     .arg(miss_curve).status().unwrap();
 }
